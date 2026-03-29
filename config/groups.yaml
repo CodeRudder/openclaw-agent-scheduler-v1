@@ -1,0 +1,90 @@
+# 工作群配置
+# 定义各个工作群及其角色、目标群、Agent映射
+
+groups:
+  dev-working-group:
+    name: 开发工作群
+    room_id: "9fzie6aawjgnfk6dyohf89p1wh"
+    role: requester  # 请求者群
+    target_groups:
+      - qa-acceptance-group
+    agents:
+      - fullstack-dev
+      - architect
+    description: 负责功能开发和架构设计
+
+  ops-release-group:
+    name: 运维发布群
+    room_id: "sqd4znntifd47pper67qe7fzua"
+    role: executor  # 执行者群
+    target_groups:
+      - qa-acceptance-group
+    agents:
+      - ops
+      - architect
+    description: 负责部署发布和运维
+
+  qa-acceptance-group:
+    name: 验收测试群
+    room_id: "3wo4cnz1ypgbxffdn8kqz35jpy"
+    role: validator  # 验证者群
+    target_groups:
+      - dev-working-group
+    agents:
+      - qa
+      - product
+    description: 负责质量验收和产品确认
+
+  plan-design-group:
+    name: 规划设计群
+    room_id: "rhz3p6fepbnhxye8iq36xy6zkh"
+    role: planner  # 规划者群
+    target_groups:
+      - dev-working-group
+    agents:
+      - product
+      - ui-designer
+      - architect
+      - qa
+    description: 负责需求规划和设计评审
+
+# Agent角色分类
+# 用于判断超时严重程度
+agent_roles:
+  executors:
+    # 执行者 - 超时必须通知
+    - fullstack-dev
+    - backend-dev
+    - frontend-dev
+    - ops
+
+  advisors:
+    # 顾问/架构师 - 超时可等待
+    - architect
+    - product
+    - qa
+    - ui-designer
+
+# Mattermost配置
+mattermost:
+  url: "http://localhost:8066"
+  admin_user: "claw-admin"
+  admin_password: "ClawAdmin@2026"
+
+# LiteLLM配置 (Claude代理)
+litellm:
+  url: "http://localhost:4000"
+  model: "claude-sonnet-4-6"
+
+# 飞书配置
+feishu:
+  webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/4e88e92c-ea88-4b08-bb1c-b8d47d1e56b0"
+
+# 调度配置
+scheduler:
+  # 会话超时阈值（分钟）
+  session_timeout_minutes: 10
+  # 每群获取消息数量
+  messages_per_group: 20
+  # 通知冷却时间（分钟）- 防止频繁通知同一群
+  notification_cooldown_minutes: 30

@@ -1,0 +1,65 @@
+# 工作群配置示例
+# 复制此文件为 groups.yaml 并修改配置
+
+groups:
+  dev-working-group:
+    name: 开发工作群
+    room_id: "your-channel-id-here"
+    role: requester  # 请求者群
+    target_groups:
+      - qa-acceptance-group
+    agents:
+      - fullstack-dev
+      - architect
+    description: 负责功能开发和架构设计
+
+  qa-acceptance-group:
+    name: 验收测试群
+    room_id: "your-channel-id-here"
+    role: validator  # 验证者群
+    target_groups:
+      - dev-working-group
+    agents:
+      - qa
+      - product
+    description: 负责质量验收和产品确认
+
+# Agent角色分类
+agent_roles:
+  executors:
+    # 执行者 - 超时必须通知
+    - fullstack-dev
+    - backend-dev
+    - frontend-dev
+    - ops
+
+  advisors:
+    # 顾问/架构师 - 超时可等待
+    - architect
+    - product
+    - qa
+
+# Mattermost配置
+mattermost:
+  url: "http://localhost:8066"
+  # Token建议使用环境变量: MATTERMOST_TOKEN
+
+# LiteLLM配置 (Claude代理)
+litellm:
+  url: "http://localhost:4000"
+  model: "claude-sonnet-4-6"
+  # API Key建议使用环境变量: LITELLM_API_KEY
+
+# 飞书配置 (可选)
+feishu:
+  webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
+  # 或使用环境变量: FEISHU_WEBHOOK
+
+# 调度配置
+scheduler:
+  # 会话超时阈值（分钟）
+  session_timeout_minutes: 10
+  # 每群获取消息数量
+  messages_per_group: 20
+  # 通知冷却时间（分钟）
+  notification_cooldown_minutes: 30

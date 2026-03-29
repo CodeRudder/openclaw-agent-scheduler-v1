@@ -1,1 +1,10 @@
-{"history": []}
+{
+  "history": [
+    {
+      "timestamp": "2026-03-29T20:40:36.337397",
+      "source_group": "dev-working-group",
+      "target_group": "qa-acceptance-group",
+      "reason": "【关键问题解决通知场景】\n\n1. **问题状态分析**：\n   - 验收群在18:47报告V5.7验收未通过，发现P0功能缺陷（评论CRUD问题）\n   - 开发群fullstack-dev在20:1"
+    }
+  ]
+}
