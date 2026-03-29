@@ -442,7 +442,7 @@ class ClaudeDrivenScheduler:
 
 ---
 *生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}*
-*文档路径: data/bugs/bug_report_{timestamp}.md*
+*文档路径: {doc_file}*
 """
 
         # 保存文档
@@ -450,7 +450,7 @@ class ClaudeDrivenScheduler:
             with open(doc_file, 'w', encoding='utf-8') as f:
                 f.write(content)
             logger.info(f"📄 BUG文档已生成: {doc_file}")
-            return f"data/bugs/bug_report_{timestamp}.md"
+            return str(doc_file)  # 返回全路径
         except Exception as e:
             logger.error(f"生成BUG文档失败: {e}")
             return None

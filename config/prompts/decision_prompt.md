@@ -24,40 +24,27 @@
 **核心原则**: 提取QA原始消息内容，系统生成详细文档
 
 **必须提取两项内容**:
-1. `extracted_issues`: 失败项摘要列表（简短）
-2. `qa_raw_messages`: QA的**完整原始消息**（逐字复制，用于生成详细文档）
+1. `extracted_issues`: 失败项摘要列表（简短，每项不超过50字）
+2. `qa_raw_messages`: QA的**完整原始消息**（逐字复制，这是最重要的字段！）
 
-**qa_raw_messages提取规则（重要！）**:
-- 找到QA发送的验收报告消息（包含TC-XXX、失败原因、API路径等）
-- **逐字完整复制**QA消息内容，不要概括、不要省略
-- 包含所有技术细节：API路径、错误码、请求/响应、数据库错误等
-- 如果有多条消息，用换行分隔合并
+**⚠️ qa_raw_messages提取规则（强制要求）**:
+1. **识别验收报告**: 找到包含验收结果的消息（关键词：验收报告、测试结果、TC-XXX、通过/失败）
+2. **逐字复制**: 完整复制验收报告的原文内容，一个字都不要改
+3. **不要概括**: ❌ "验收失败，有bug" → ✅ 完整复制整个验收报告
+4. **包含所有细节**: API路径、HTTP状态码、错误消息、数据库错误、请求/响应内容
 
-**例子**:
+**⚠️ 错误示例 vs 正确示例**:
 ```
-QA原始消息:
-"## V5.7验收报告
-⚠️ 部分通过
+❌ 错误（太简短，丢失信息）:
+"qa_raw_messages": "验收5.7部分通过，TC-018和TC-019失败"
 
-### ❌ 失败用例
-1. TC-018: 评论历史记录功能
-   - API: GET /api/v1/comments/{commentId}/history
-   - 实际: 404 Not Found
-   - 错误: Cannot GET /api/v1/comments/test-comment/history
-   - 根因: 该API路由未实现
-
-2. TC-019: 评论通知功能
-   - API: POST /api/v1/notifications
-   - 实际: 500 Internal Server Error
-   - 错误: foreign_key_violation: notifications表缺少user_id外键
-   - 建议: 需要先创建user记录或添加外键约束"
-
-正确的qa_raw_messages: （完整复制以上所有内容）
+✅ 正确（完整复制验收报告）:
+"qa_raw_messages": "## V5.7验收报告\n\n### 验收结果: ⚠️ 部分通过\n\n### ❌ 失败用例\n1. TC-018: 评论历史记录功能\n   - API: GET /api/v1/comments/{commentId}/history\n   - 实际响应: 404 Not Found\n   - 错误信息: Cannot GET /api/v1/comments/test-comment-123/history\n   - 根因分析: 该API路由未实现\n\n2. TC-019: 评论通知功能\n   - API: POST /api/v1/notifications\n   - 实际响应: 500 Internal Server Error\n   - 错误信息: foreign_key_violation: notifications表缺少user_id外键约束\n   - 建议: 需要先创建user记录或添加外键约束"
 ```
 
-**extracted_issues**（简短摘要）:
+**extracted_issues**（简短摘要，方便快速浏览）:
 ```
-["TC-018: 评论历史记录API不存在", "TC-019: 评论通知功能外键错误"]
+["TC-018: 评论历史记录API不存在(404)", "TC-019: 评论通知功能外键错误(500)"]
 ```
 
 **决策逻辑**:
@@ -107,11 +94,14 @@ if 全部通过 → ignore
     "message_content": "通知内容",
     "reasoning": "决策理由",
     "extracted_issues": ["TC-XXX: 简短摘要"],
-    "qa_raw_messages": "QA的完整原始消息内容（逐字复制，用于生成详细文档）"
+    "qa_raw_messages": "⚠️ 必须逐字复制验收报告原文，包含所有技术细节！"
 }
 ```
 
-**注意**: `qa_raw_messages` 只在验收群发现问题且需要通知时填写，其他场景可为空。
+**字段要求**:
+- `qa_raw_messages`: **最重要！** 验收问题时必须完整复制QA原始报告，不能概括
+- `extracted_issues`: 简短摘要列表，每项不超过50字
+- 其他场景（非验收问题）`qa_raw_messages` 可为空字符串
 
 ## 重要提醒
 1. 只能@目标群成员
