@@ -21,13 +21,44 @@
 **行动**: 通知请求群"问题已解决，请继续"
 
 ### 3. 【关键】验收问题通知规则
-**核心原则**: 必须提取所有失败项到 `extracted_issues`，系统自动生成文档
+**核心原则**: 提取QA原始消息内容，系统生成详细文档
 
-**提取要求（逐字复制）**:
-- TC-XXX/BUG-XXX 编号
-- 具体API路径（如 GET /api/v1/...）
-- 错误码和错误信息
-- ❌ 禁止模糊描述："部分测试失败"、"有API问题"
+**必须提取两项内容**:
+1. `extracted_issues`: 失败项摘要列表（简短）
+2. `qa_raw_messages`: QA的**完整原始消息**（逐字复制，用于生成详细文档）
+
+**qa_raw_messages提取规则（重要！）**:
+- 找到QA发送的验收报告消息（包含TC-XXX、失败原因、API路径等）
+- **逐字完整复制**QA消息内容，不要概括、不要省略
+- 包含所有技术细节：API路径、错误码、请求/响应、数据库错误等
+- 如果有多条消息，用换行分隔合并
+
+**例子**:
+```
+QA原始消息:
+"## V5.7验收报告
+⚠️ 部分通过
+
+### ❌ 失败用例
+1. TC-018: 评论历史记录功能
+   - API: GET /api/v1/comments/{commentId}/history
+   - 实际: 404 Not Found
+   - 错误: Cannot GET /api/v1/comments/test-comment/history
+   - 根因: 该API路由未实现
+
+2. TC-019: 评论通知功能
+   - API: POST /api/v1/notifications
+   - 实际: 500 Internal Server Error
+   - 错误: foreign_key_violation: notifications表缺少user_id外键
+   - 建议: 需要先创建user记录或添加外键约束"
+
+正确的qa_raw_messages: （完整复制以上所有内容）
+```
+
+**extracted_issues**（简短摘要）:
+```
+["TC-018: 评论历史记录API不存在", "TC-019: 评论通知功能外键错误"]
+```
 
 **决策逻辑**:
 ```
@@ -75,9 +106,12 @@ if 全部通过 → ignore
     "mention_users": ["本群成员"],
     "message_content": "通知内容",
     "reasoning": "决策理由",
-    "extracted_issues": ["TC-XXX: 具体问题", "API路径: 错误信息"]
+    "extracted_issues": ["TC-XXX: 简短摘要"],
+    "qa_raw_messages": "QA的完整原始消息内容（逐字复制，用于生成详细文档）"
 }
 ```
+
+**注意**: `qa_raw_messages` 只在验收群发现问题且需要通知时填写，其他场景可为空。
 
 ## 重要提醒
 1. 只能@目标群成员

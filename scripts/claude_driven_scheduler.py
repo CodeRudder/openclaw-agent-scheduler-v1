@@ -126,6 +126,7 @@ class SchedulingDecision:
     message_content: str = ""  # 详细消息内容
     reasoning: str = ""  # 决策理由
     source_group: str = ""  # 来源群组ID
+    qa_raw_messages: str = ""  # QA原始消息内容（用于生成详细文档）
 
 
 class ClaudeDrivenScheduler:
@@ -386,7 +387,8 @@ class ClaudeDrivenScheduler:
                     extracted_issues=decision_data.get("extracted_issues", []),
                     message_content=decision_data.get("message_content", ""),
                     reasoning=decision_data.get("reasoning", ""),
-                    source_group=source_group
+                    source_group=source_group,
+                    qa_raw_messages=decision_data.get("qa_raw_messages", "")
                 )
         except Exception as e:
             logger.error(f"Claude分析失败: {e}")
@@ -394,7 +396,7 @@ class ClaudeDrivenScheduler:
         return None
 
     def generate_bug_document(self, decision: SchedulingDecision) -> Optional[str]:
-        """生成BUG详细文档，返回文档路径"""
+        """生成BUG详细文档，使用QA原始消息，返回文档路径"""
         if not decision.extracted_issues:
             return None
 
@@ -406,7 +408,7 @@ class ClaudeDrivenScheduler:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         doc_file = bug_dir / f"bug_report_{timestamp}.md"
 
-        # 构建文档内容
+        # 构建文档内容 - 使用QA原始消息
         content = f"""# 🐛 BUG报告 - {datetime.now().strftime("%Y-%m-%d %H:%M")}
 
 ## 📋 基本信息
@@ -414,17 +416,26 @@ class ClaudeDrivenScheduler:
 - **目标群**: {decision.target_group_name or '未知'}
 - **优先级**: P0（需要立即处理）
 
-## ❌ 失败项详情
+## ❌ 失败项摘要
 
 """
-        # 添加每个失败项
+        # 添加每个失败项摘要
         for i, issue in enumerate(decision.extracted_issues, 1):
-            content += f"### {i}. {issue}\n\n"
+            content += f"{i}. {issue}\n"
+
+        # 添加QA原始消息（完整保留）
+        if decision.qa_raw_messages:
+            content += f"""
+## 📝 QA原始报告（完整内容）
+
+{decision.qa_raw_messages}
+
+"""
 
         # 添加建议行动
         content += f"""## 📋 需要行动
 @{decision.mention_users[0] if decision.mention_users else 'dev'} 请：
-1. 查看以上失败项详情
+1. 查看以上QA原始报告的完整内容
 2. 分析根本原因
 3. 实现修复方案
 4. 修复完成后通知验收团队重新验收
