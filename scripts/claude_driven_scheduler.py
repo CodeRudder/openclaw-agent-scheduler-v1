@@ -127,6 +127,7 @@ class SchedulingDecision:
     reasoning: str = ""  # 决策理由
     source_group: str = ""  # 来源群组ID
     qa_raw_messages: str = ""  # QA原始消息内容（用于生成详细文档）
+    bug_doc_complete: bool = True  # BUG文档是否完整（包含操作步骤+参数+实际结果+期望结果）
 
 
 class ClaudeDrivenScheduler:
@@ -388,7 +389,8 @@ class ClaudeDrivenScheduler:
                     message_content=decision_data.get("message_content", ""),
                     reasoning=decision_data.get("reasoning", ""),
                     source_group=source_group,
-                    qa_raw_messages=decision_data.get("qa_raw_messages", "")
+                    qa_raw_messages=decision_data.get("qa_raw_messages", ""),
+                    bug_doc_complete=decision_data.get("bug_doc_complete", True)
                 )
         except Exception as e:
             logger.error(f"Claude分析失败: {e}")
@@ -457,26 +459,52 @@ class ClaudeDrivenScheduler:
 
     def send_mattermost_notification(self, decision: SchedulingDecision):
         """发送Mattermost通知（复杂问题自动生成文档）"""
-        target_channel = GROUPS.get(decision.target_group, {}).get("channel_id", "")
-        if not target_channel:
-            logger.error(f"找不到目标群: {decision.target_group}")
-            return False
 
-        # 【强制规则】验收问题必须生成文档
-        # 只要有extracted_issues，就必须生成详细文档
-        doc_path = None
-        if decision.extracted_issues:
-            doc_path = self.generate_bug_document(decision)
-
-        mentions = " ".join([f"@{u}" for u in decision.mention_users])
-
-        # 构建消息（有文档时附带文档路径）
-        if doc_path:
-            # 复杂问题：关键摘要 + 文档链接
-            key_issues = decision.extracted_issues[:3]
-            summary = "\n".join([f"- {i[:100]}..." if len(i) > 100 else f"- {i}" for i in key_issues])
+        # 检查文档是否完整
+        if not decision.bug_doc_complete and decision.extracted_issues:
+            # 文档不完整 → 通知验收群重新生成
+            logger.warning("⚠️ BUG文档不完整，通知QA重新生成")
+            target_group = "qa-acceptance-group"
+            target_channel = GROUPS.get(target_group, {}).get("channel_id", "")
+            mention_users = GROUPS.get(target_group, {}).get("agents", [])
+            mentions = " ".join([f"@{u}" for u in mention_users])
 
             message = f"""{mentions}
+
+## ⚠️ BUG报告不完整，请重新生成
+
+### 📋 当前报告缺少以下必要信息:
+1. **操作步骤**: 具体做了什么操作
+2. **请求参数**: 完整的请求body/query/path参数
+3. **实际结果**: 返回的状态码、响应体、错误信息
+4. **期望结果**: 应该返回什么
+
+### ❌ 当前报告内容:
+{chr(10).join([f'- {i}' for i in decision.extracted_issues])}
+
+### 📝 请重新生成完整报告，包含以上4项信息
+> 💡 完整的BUG报告可以帮助开发快速定位和修复问题
+"""
+        else:
+            # 正常通知流程
+            target_channel = GROUPS.get(decision.target_group, {}).get("channel_id", "")
+            if not target_channel:
+                logger.error(f"找不到目标群: {decision.target_group}")
+                return False
+
+            # 验收问题必须生成文档
+            doc_path = None
+            if decision.extracted_issues:
+                doc_path = self.generate_bug_document(decision)
+
+            mentions = " ".join([f"@{u}" for u in decision.mention_users])
+
+            # 构建消息（有文档时附带文档路径）
+            if doc_path:
+                key_issues = decision.extracted_issues[:3]
+                summary = "\n".join([f"- {i[:100]}..." if len(i) > 100 else f"- {i}" for i in key_issues])
+
+                message = f"""{mentions}
 
 ## ❌ 验收失败项通知
 
@@ -488,9 +516,8 @@ class ClaudeDrivenScheduler:
 
 > 💡 文档包含完整的失败原因、API路径、错误信息等
 """
-        else:
-            # 简单问题：直接发送
-            message = f"{mentions}\n\n{decision.message_content}"
+            else:
+                message = f"{mentions}\n\n{decision.message_content}"
 
         try:
             resp = requests.post(
