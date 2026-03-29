@@ -8,6 +8,16 @@
 
 ## 核心规则（按优先级）
 
+### 0. 【最高优先级】所有跨群通知必须提取原始消息
+**规则**: 所有跨群通知的 `raw_messages` 字段必须逐字复制来源群的原始消息
+**原因**: 避免丢失密码、账号、URL、配置参数等关键细节
+**示例**:
+```
+来源群消息: "部署成功，账号admin，密码Admin@123，URL: http://localhost:8080"
+❌ 错误: "部署已完成" → 丢失了账号密码
+✅ 正确: 完整复制原文 "部署成功，账号admin，密码Admin@123，URL: http://localhost:8080"
+```
+
 ### 1. 【最高优先级】执行者超时 = 必须通知
 **执行者**: fullstack-dev（开发）、ops（运维）、qa（验证）
 **顾问**: architect、product（不能代替执行者）
@@ -194,18 +204,22 @@ if 验收群最新消息是"验收通过"但未提及:
     "message_content": "通知内容",
     "reasoning": "决策理由",
     "extracted_issues": ["TC-XXX: 简短摘要"],
-    "qa_raw_messages": "⚠️ 必须逐字复制验收报告原文，包含所有技术细节！",
+    "raw_messages": "⚠️ 必须逐字复制原始消息，保留密码、账号、URL等关键细节！",
+    "qa_raw_messages": "验收报告原文（向后兼容，优先使用raw_messages）",
     "bug_doc_complete": true或false
 }
 ```
 
 **字段要求**:
-- `qa_raw_messages`: **最重要！** 验收问题时必须完整复制QA原始报告
+- `raw_messages`: **最重要！** 所有跨群通知必须逐字复制来源群的原始消息
+  - 包含：密码、账号、URL、API路径、错误码、配置参数等
+  - 不要概括、不要改写，原样复制
+  - 示例：复制包含 `password: xxx` 或 `token: xxx` 的完整消息
+- `qa_raw_messages`: 验收报告原文（向后兼容，优先使用raw_messages）
 - `bug_doc_complete`: 检查每个失败项是否包含【操作步骤+参数+实际结果+期望结果】4项
   - `true`: 文档完整，可以通知开发/运维处理
   - `false`: 文档不完整，需要通知QA重新生成
 - `extracted_issues`: 简短摘要列表，每项不超过50字
-- 其他场景（非验收问题）`qa_raw_messages` 可为空，`bug_doc_complete` 为 true
 
 ## 重要提醒
 1. 只能@目标群成员

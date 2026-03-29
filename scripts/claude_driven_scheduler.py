@@ -136,8 +136,10 @@ class SchedulingDecision:
     message_content: str = ""  # 详细消息内容
     reasoning: str = ""  # 决策理由
     source_group: str = ""  # 来源群组ID
-    qa_raw_messages: str = ""  # QA原始消息内容（用于生成详细文档）
-    bug_doc_complete: bool = True  # BUG文档是否完整（包含操作步骤+参数+实际结果+期望结果）
+    raw_messages: str = ""  # AI提取的消息内容（备用）
+    agent_raw_message: str = ""  # 从API直接获取的agent最后一条完整消息（保证内容不丢失）
+    qa_raw_messages: str = ""  # QA原始消息内容（向后兼容）
+    bug_doc_complete: bool = True  # BUG文档是否完整
 
 
 class ClaudeDrivenScheduler:
@@ -237,6 +239,65 @@ class ClaudeDrivenScheduler:
             logger.error(f"获取群消息失败: {e}")
             return []
 
+    def get_agent_last_message(self, channel_id: str, agent_name: str) -> Optional[str]:
+        """直接从Mattermost API获取指定agent的最后一条完整消息"""
+        try:
+            # 获取频道成员信息，找到agent的user_id
+            members_resp = requests.get(
+                f"{MM_URL}/api/v4/channels/{channel_id}/members",
+                headers=self.headers,
+                timeout=10
+            )
+            if members_resp.status_code != 200:
+                logger.debug(f"获取频道成员失败: {members_resp.status_code}")
+                return None
+
+            members = members_resp.json()
+            agent_user_id = None
+            for member in members:
+                # 通过用户名匹配
+                user_id = member.get("user_id", "")
+                # 获取用户信息
+                user_resp = requests.get(
+                    f"{MM_URL}/api/v4/users/{user_id}",
+                    headers=self.headers,
+                    timeout=10
+                )
+                if user_resp.status_code == 200:
+                    user_data = user_resp.json()
+                    if user_data.get("username", "").lower() == agent_name.lower():
+                        agent_user_id = user_id
+                        break
+
+            if not agent_user_id:
+                logger.debug(f"未找到agent用户: {agent_name}")
+                return None
+
+            # 获取该用户在频道中的最后一条消息
+            posts_resp = requests.get(
+                f"{MM_URL}/api/v4/channels/{channel_id}/posts",
+                headers=self.headers,
+                params={"page": 0, "per_page": 30},
+                timeout=10
+            )
+            if posts_resp.status_code != 200:
+                return None
+
+            data = posts_resp.json()
+            posts = data.get("posts", {})
+            order = data.get("order", [])
+
+            # 找到该agent的最后一条消息
+            for post_id in reversed(order):
+                post = posts.get(post_id, {})
+                if post.get("user_id") == agent_user_id:
+                    return post.get("message", "")
+
+            return None
+        except Exception as e:
+            logger.error(f"获取agent最后消息失败: {e}")
+            return None
+
     def get_last_assistant_message_time(self, jsonl_file: Path) -> Optional[datetime]:
         """从jsonl文件中获取最后一条assistant消息的时间"""
         try:
@@ -320,19 +381,32 @@ class ClaudeDrivenScheduler:
                            session_status: Dict, source_group: str = "") -> Optional[SchedulingDecision]:
         """使用Claude分析并决策"""
 
-        # 构建消息摘要
+        # 构建消息摘要（用于快速理解）
         msg_summary = "\n".join([
             f"- [{datetime.fromtimestamp(m.timestamp).strftime('%H:%M')}] {m.sender}: {m.content[:100]}"
             for m in messages[-20:]
         ])
 
+        # 构建完整原始消息（用于提取raw_messages）
+        raw_messages_full = "\n\n---\n\n".join([
+            f"[{datetime.fromtimestamp(m.timestamp).strftime('%H:%M:%S')}] {m.sender}:\n{m.content}"
+            for m in messages[-10:]  # 最近10条完整消息
+        ])
+
         # 构建目标群状态
         target_status = ""
+        target_raw_messages = ""
         for group_id, msgs in target_groups_status.items():
             group_name = GROUPS.get(group_id, {}).get("name", group_id)
             target_status += f"\n### {group_name}:\n"
             for m in msgs[-5:]:
                 target_status += f"- [{datetime.fromtimestamp(m.timestamp).strftime('%H:%M')}] {m.sender}: {m.content[:80]}\n"
+            # 目标群的完整原始消息
+            target_raw_messages += f"\n\n### {group_name} 完整消息:\n"
+            target_raw_messages += "\n\n---\n\n".join([
+                f"[{datetime.fromtimestamp(m.timestamp).strftime('%H:%M:%S')}] {m.sender}:\n{m.content}"
+                for m in msgs[-5:]
+            ])
 
         # 构建通知历史
         history_str = ""
@@ -355,15 +429,24 @@ class ClaudeDrivenScheduler:
 
 {session_info}
 
-## 当前分析群组消息 (最近20条):
+## 当前分析群组消息摘要 (最近20条):
 {msg_summary}
 
-## 目标群最新状态:
+## 目标群最新状态摘要:
 {target_status}
 
 {history_str}
 
-请分析以上信息，做出调度决策。"""
+---
+## 📋 完整原始消息内容（用于逐字复制到raw_messages字段）
+
+### 当前群完整消息:
+{raw_messages_full}
+{target_raw_messages}
+
+---
+
+请分析以上信息，做出调度决策。**重要**：如果需要通知，必须从"完整原始消息内容"区域逐字复制相关内容到raw_messages字段。"""
 
         try:
             resp = requests.post(
@@ -399,7 +482,8 @@ class ClaudeDrivenScheduler:
                     message_content=decision_data.get("message_content", ""),
                     reasoning=decision_data.get("reasoning", ""),
                     source_group=source_group,
-                    qa_raw_messages=decision_data.get("qa_raw_messages", ""),
+                    raw_messages=decision_data.get("raw_messages", ""),
+                    qa_raw_messages=decision_data.get("qa_raw_messages", decision_data.get("raw_messages", "")),
                     bug_doc_complete=decision_data.get("bug_doc_complete", True)
                 )
         except Exception as e:
@@ -435,12 +519,13 @@ class ClaudeDrivenScheduler:
         for i, issue in enumerate(decision.extracted_issues, 1):
             content += f"{i}. {issue}\n"
 
-        # 添加QA原始消息（完整保留）
-        if decision.qa_raw_messages:
+        # 添加原始消息（优先使用API直接获取的完整消息，保证内容不丢失）
+        raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
+        if raw_content:
             content += f"""
-## 📝 QA原始报告（完整内容）
+## 📝 原始报告（完整内容）
 
-{decision.qa_raw_messages}
+{raw_content}
 
 """
 
@@ -477,7 +562,7 @@ class ClaudeDrivenScheduler:
             target_group = "qa-acceptance-group"
             target_channel = GROUPS.get(target_group, {}).get("channel_id", "")
             mention_users = GROUPS.get(target_group, {}).get("agents", [])
-            mentions = " ".join([f"@{u}" for u in mention_users])
+            mentions = " ".join([f"@{u.lstrip('@')}" for u in mention_users])
 
             message = f"""{mentions}
 
@@ -530,12 +615,18 @@ data/bugs/TC-XXX_description.md
             if decision.extracted_issues:
                 doc_path = self.generate_bug_document(decision)
 
-            mentions = " ".join([f"@{u}" for u in decision.mention_users])
+            mentions = " ".join([f"@{u.lstrip('@')}" for u in decision.mention_users])
 
-            # 构建消息（有文档时附带文档路径）
+            # 获取原始消息内容（优先使用API直接获取的完整消息）
+            raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
+
+            # 构建消息（有文档时附带文档路径，但仍包含关键原始内容）
             if doc_path:
                 key_issues = decision.extracted_issues[:3]
                 summary = "\n".join([f"- {i[:100]}..." if len(i) > 100 else f"- {i}" for i in key_issues])
+
+                # 截取原始消息关键部分（保留账号密码等细节）
+                raw_preview = raw_content[:1500] if raw_content else ""
 
                 message = f"""{mentions}
 
@@ -544,13 +635,29 @@ data/bugs/TC-XXX_description.md
 ### 🔴 关键问题摘要
 {summary}
 
-### 📋 完整问题详情
-📄 请查看: `{doc_path}`
+### 📋 原始消息内容
+{raw_preview}
+{"..." if raw_content and len(raw_content) > 1500 else ""}
 
-> 💡 文档包含完整的失败原因、API路径、错误信息等
+### 📄 完整报告
+详见: `{doc_path}`
 """
             else:
-                message = f"{mentions}\n\n{decision.message_content}"
+                # 无文档时，直接包含原始消息内容
+                raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
+                if raw_content:
+                    message = f"""{mentions}
+
+## 📋 跨群消息转发
+
+{decision.message_content}
+
+---
+### 📝 原始消息内容
+{raw_content[:2000]}{"..." if len(raw_content) > 2000 else ""}
+"""
+                else:
+                    message = f"{mentions}\n\n{decision.message_content}"
 
         try:
             resp = requests.post(
@@ -602,14 +709,25 @@ data/bugs/TC-XXX_description.md
             return False
 
         try:
+            # 获取原始消息内容（优先使用API直接获取的完整消息）
+            raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
+
             # 构建富文本消息
             content_lines = [
                 [{"tag": "text", "text": f"【智能调度通知】", "style": ["bold"]}],
                 [{"tag": "text", "text": f"目标: {decision.target_group_name}"}],
                 [{"tag": "text", "text": f"@对象: {', '.join(decision.mention_users)}"}],
                 [{"tag": "text", "text": ""}],
-                [{"tag": "text", "text": decision.message_content[:500]}],  # 限制长度
+                [{"tag": "text", "text": decision.message_content[:300] if decision.message_content else ""}],
             ]
+
+            # 添加原始消息（包含密码、账号等细节）
+            if raw_content:
+                content_lines.append([{"tag": "text", "text": ""}])
+                content_lines.append([{"tag": "text", "text": "原始消息:", "style": ["bold"] }])
+                # 截断过长的内容
+                truncated = raw_content[:800] + "..." if len(raw_content) > 800 else raw_content
+                content_lines.append([{"tag": "text", "text": truncated}])
 
             if decision.extracted_issues:
                 content_lines.append([{"tag": "text", "text": ""}])
@@ -722,6 +840,15 @@ data/bugs/TC-XXX_description.md
                 if decision.target_group in notified_groups:
                     logger.info(f"  ⏭ 跳过 {decision.target_group_name} - 已在本轮通知过")
                     continue
+
+                # 🔑 关键：直接从API获取来源群中第一个mention_agent的最后一条完整消息
+                if decision.mention_users:
+                    source_channel_id = GROUPS.get(decision.source_group, {}).get("channel_id", "")
+                    first_agent = decision.mention_users[0]
+                    agent_raw_msg = self.get_agent_last_message(source_channel_id, first_agent)
+                    if agent_raw_msg:
+                        decision.agent_raw_message = agent_raw_msg
+                        logger.info(f"  📥 直接获取 {first_agent} 的最后消息 ({len(agent_raw_msg)}字符)")
 
                 # 发送通知
                 if self.send_mattermost_notification(decision):
