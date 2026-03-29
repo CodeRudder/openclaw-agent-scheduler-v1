@@ -539,6 +539,7 @@ class ClaudeDrivenScheduler:
     def send_feishu_notification(self, decision: SchedulingDecision):
         """发送飞书通知"""
         if not FEISHU_WEBHOOK:
+            logger.warning("飞书Webhook未配置，跳过通知")
             return False
 
         try:
@@ -557,6 +558,13 @@ class ClaudeDrivenScheduler:
                 timeout=10
             )
             resp.raise_for_status()
+
+            # 检查飞书返回的业务状态码
+            result = resp.json()
+            if result.get("code", 0) != 0:
+                logger.error(f"飞书通知发送失败: {result.get('msg', 'unknown error')}")
+                return False
+
             logger.info("✅ 飞书通知发送成功")
             return True
         except Exception as e:
