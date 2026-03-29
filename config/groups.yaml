@@ -76,9 +76,10 @@ litellm:
   url: "http://localhost:4000"
   model: "claude-sonnet-4-6"
 
-# 飞书配置
+# 飞书配置（使用应用API - 凭证从环境变量读取）
 feishu:
-  webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/4e88e92c-ea88-4b08-bb1c-b8d47d1e56b0"
+  chat_id: "oc_67b5713a4f8b75a2d766ae110f11694f"  # 工作群监控
+  # app_id 和 app_secret 从 .env 文件读取
 
 # 调度配置
 scheduler:

@@ -25,6 +25,13 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
+# 加载.env文件
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass  # dotenv未安装，使用系统环境变量
+
 # 获取脚本所在目录，支持相对路径
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_DIR = SCRIPT_DIR.parent
@@ -86,8 +93,11 @@ LITELLM_URL = CONFIG.get("litellm", {}).get("url", "http://localhost:4000")
 LITELLM_MODEL = CONFIG.get("litellm", {}).get("model", "claude-sonnet-4-6")
 LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "sk-litellm-openclaw-2026-03-15")
 
-# 飞书配置
-FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK", CONFIG.get("feishu", {}).get("webhook_url", ""))
+# 飞书配置（应用API方式 - 凭证从环境变量读取）
+FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
+FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
+FEISHU_CHAT_ID = CONFIG.get("feishu", {}).get("chat_id", os.environ.get("FEISHU_CHAT_ID", ""))
+FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 
 # 调度配置
 SESSION_TIMEOUT_MINUTES = CONFIG.get("scheduler", {}).get("session_timeout_minutes", 10)
@@ -474,16 +484,39 @@ class ClaudeDrivenScheduler:
 ## ⚠️ BUG报告不完整，请重新生成
 
 ### 📋 当前报告缺少以下必要信息:
-1. **操作步骤**: 具体做了什么操作
-2. **请求参数**: 完整的请求body/query/path参数
+1. **操作步骤**: 具体做了什么操作（UI操作或API调用）
+2. **输入数据/参数**: 测试使用的具体数据
 3. **实际结果**: 返回的状态码、响应体、错误信息
 4. **期望结果**: 应该返回什么
 
-### ❌ 当前报告内容:
+### ❌ 当前报告内容（不完整）:
 {chr(10).join([f'- {i}' for i in decision.extracted_issues])}
 
-### 📝 请重新生成完整报告，包含以上4项信息
-> 💡 完整的BUG报告可以帮助开发快速定位和修复问题
+### 📝 请重新生成完整报告
+**重要**：请按以下格式生成BUG报告，并保存到文件：
+
+\`\`\`
+data/bugs/TC-XXX_description.md
+\`\`\`
+
+**报告格式**:
+\`\`\`markdown
+# TC-XXX: [测试用例名称]
+
+## 操作步骤
+[具体的UI操作步骤或API调用]
+
+## 输入数据/参数
+[请求body/query/path参数]
+
+## 实际结果
+[返回的状态码、响应体、错误信息]
+
+## 期望结果
+[应该返回什么]
+\`\`\`
+
+> 💡 **完整BUG报告 + 文件路径 = 开发可以立即开始修复**
 """
         else:
             # 正常通知流程
@@ -536,37 +569,90 @@ class ClaudeDrivenScheduler:
             logger.error(f"Mattermost通知发送失败: {e}")
             return False
 
+    def get_feishu_token(self) -> Optional[str]:
+        """获取飞书tenant_access_token"""
+        if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
+            return None
+
+        try:
+            url = f"{FEISHU_API_BASE}/auth/v3/tenant_access_token/internal"
+            resp = requests.post(
+                url,
+                json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == 0:
+                    return data.get("tenant_access_token")
+        except Exception as e:
+            logger.error(f"获取飞书token失败: {e}")
+        return None
+
     def send_feishu_notification(self, decision: SchedulingDecision):
-        """发送飞书通知"""
-        if not FEISHU_WEBHOOK:
-            logger.warning("飞书Webhook未配置，跳过通知")
+        """发送飞书通知（使用应用API）"""
+        if not FEISHU_CHAT_ID:
+            logger.warning("飞书Chat ID未配置，跳过通知")
+            return False
+
+        # 获取token
+        token = self.get_feishu_token()
+        if not token:
+            logger.warning("获取飞书token失败，跳过通知")
             return False
 
         try:
-            content = f"""【智能调度通知】
-目标: {decision.target_group_name}
-@对象: {', '.join(decision.mention_users)}
+            # 构建富文本消息
+            content_lines = [
+                [{"tag": "text", "text": f"【智能调度通知】", "style": ["bold"]}],
+                [{"tag": "text", "text": f"目标: {decision.target_group_name}"}],
+                [{"tag": "text", "text": f"@对象: {', '.join(decision.mention_users)}"}],
+                [{"tag": "text", "text": ""}],
+                [{"tag": "text", "text": decision.message_content[:500]}],  # 限制长度
+            ]
 
-{decision.message_content}
+            if decision.extracted_issues:
+                content_lines.append([{"tag": "text", "text": ""}])
+                content_lines.append([{"tag": "text", "text": "问题摘要:", "style": ["bold"] }])
+                for issue in decision.extracted_issues[:5]:  # 最多5个
+                    content_lines.append([{"tag": "text", "text": f"• {issue[:100]}"}])
 
-问题摘要:
-{chr(10).join(['• ' + i for i in decision.extracted_issues])}
-"""
+            rich_text = {
+                "zh_cn": {
+                    "title": "调度通知",
+                    "content": content_lines
+                }
+            }
+
+            url = f"{FEISHU_API_BASE}/im/v1/messages"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "receive_id": FEISHU_CHAT_ID,
+                "msg_type": "post",
+                "content": json.dumps(rich_text)
+            }
+
             resp = requests.post(
-                FEISHU_WEBHOOK,
-                json={"msg_type": "text", "content": {"text": content}},
+                url,
+                headers=headers,
+                params={"receive_id_type": "chat_id"},
+                json=payload,
                 timeout=10
             )
-            resp.raise_for_status()
 
-            # 检查飞书返回的业务状态码
-            result = resp.json()
-            if result.get("code", 0) != 0:
-                logger.error(f"飞书通知发送失败: {result.get('msg', 'unknown error')}")
-                return False
-
-            logger.info("✅ 飞书通知发送成功")
-            return True
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == 0:
+                    logger.info("✅ 飞书通知发送成功")
+                    return True
+                else:
+                    logger.error(f"飞书通知发送失败: {data.get('msg')}")
+            else:
+                logger.error(f"飞书HTTP错误: {resp.status_code}")
+            return False
         except Exception as e:
             logger.error(f"飞书通知发送失败: {e}")
             return False
