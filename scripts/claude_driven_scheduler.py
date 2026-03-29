@@ -125,6 +125,7 @@ class SchedulingDecision:
     extracted_issues: List[str]  # 提炼出的具体问题
     message_content: str = ""  # 详细消息内容
     reasoning: str = ""  # 决策理由
+    source_group: str = ""  # 来源群组ID
 
 
 class ClaudeDrivenScheduler:
@@ -224,8 +225,36 @@ class ClaudeDrivenScheduler:
             logger.error(f"获取群消息失败: {e}")
             return []
 
+    def get_last_assistant_message_time(self, jsonl_file: Path) -> Optional[datetime]:
+        """从jsonl文件中获取最后一条assistant消息的时间"""
+        try:
+            last_assistant_time = None
+            with open(jsonl_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+                        # 检查是否是 assistant 消息
+                        if msg.get("type") == "message":
+                            message = msg.get("message", {})
+                            if message.get("role") == "assistant":
+                                timestamp_str = msg.get("timestamp")
+                                if timestamp_str:
+                                    # 解析 ISO 格式时间戳
+                                    last_assistant_time = datetime.fromisoformat(
+                                        timestamp_str.replace('Z', '+00:00')
+                                    )
+                    except json.JSONDecodeError:
+                        continue
+            return last_assistant_time
+        except Exception as e:
+            logger.debug(f"解析jsonl文件失败 {jsonl_file}: {e}")
+            return None
+
     def check_agent_session_status(self, group_id: str) -> Dict:
-        """检查群的agent会话是否超时"""
+        """检查群的agent会话是否超时（基于最后一条assistant消息时间）"""
         agents = GROUPS.get(group_id, {}).get("agents", [])
         if not agents:
             return {"has_session": False, "is_timeout": False, "agents": []}
@@ -238,13 +267,24 @@ class ClaudeDrivenScheduler:
             if not agent_session_dir.exists():
                 continue
 
-            session_files = list(agent_session_dir.glob("*.jsonl"))
+            # 查找最新的 session 文件（排除 backup 文件）
+            session_files = [f for f in agent_session_dir.glob("*.jsonl")
+                           if "backup" not in f.name]
             if not session_files:
                 continue
 
             latest_file = max(session_files, key=lambda x: x.stat().st_mtime)
-            mtime = latest_file.stat().st_mtime
-            time_diff = (datetime.now() - datetime.fromtimestamp(mtime)).total_seconds() / 60
+
+            # 尝试从 jsonl 中获取最后一条 assistant 消息时间
+            last_activity = self.get_last_assistant_message_time(latest_file)
+
+            if last_activity:
+                # 使用 assistant 消息时间计算超时
+                time_diff = (datetime.now(last_activity.tzinfo) - last_activity).total_seconds() / 60
+            else:
+                # 回退：使用文件修改时间
+                mtime = latest_file.stat().st_mtime
+                time_diff = (datetime.now() - datetime.fromtimestamp(mtime)).total_seconds() / 60
 
             is_timeout = time_diff > SESSION_TIMEOUT_MINUTES
 
@@ -255,7 +295,7 @@ class ClaudeDrivenScheduler:
             result["has_session"] = True
             result["agents"].append({
                 "name": agent_name,
-                "last_activity": mtime,
+                "last_activity": last_activity.isoformat() if last_activity else None,
                 "minutes_ago": int(time_diff),
                 "is_timeout": is_timeout,
                 "session_file": str(latest_file)
@@ -265,7 +305,7 @@ class ClaudeDrivenScheduler:
 
     def analyze_with_claude(self, messages: List[GroupMessage], context: str,
                            target_groups_status: Dict, notification_history: Dict,
-                           session_status: Dict) -> Optional[SchedulingDecision]:
+                           session_status: Dict, source_group: str = "") -> Optional[SchedulingDecision]:
         """使用Claude分析并决策"""
 
         # 构建消息摘要
@@ -345,7 +385,8 @@ class ClaudeDrivenScheduler:
                     mention_users=decision_data.get("mention_users", []),
                     extracted_issues=decision_data.get("extracted_issues", []),
                     message_content=decision_data.get("message_content", ""),
-                    reasoning=decision_data.get("reasoning", "")
+                    reasoning=decision_data.get("reasoning", ""),
+                    source_group=source_group
                 )
         except Exception as e:
             logger.error(f"Claude分析失败: {e}")
@@ -410,16 +451,15 @@ class ClaudeDrivenScheduler:
             logger.error(f"找不到目标群: {decision.target_group}")
             return False
 
-        # 检查是否需要生成文档（问题详情超过300字符）
-        issues_content = "\n".join([f"- {i}" for i in decision.extracted_issues])
+        # 【强制规则】验收问题必须生成文档
+        # 只要有extracted_issues，就必须生成详细文档
         doc_path = None
-
-        if len(issues_content) > 300 and decision.extracted_issues:
-            doc_path = self.generate_bug_document(decision.extracted_issues, decision.target_group_name)
+        if decision.extracted_issues:
+            doc_path = self.generate_bug_document(decision)
 
         mentions = " ".join([f"@{u}" for u in decision.mention_users])
 
-        # 构建消息
+        # 构建消息（有文档时附带文档路径）
         if doc_path:
             # 复杂问题：关键摘要 + 文档链接
             key_issues = decision.extracted_issues[:3]
@@ -530,7 +570,7 @@ class ClaudeDrivenScheduler:
             # Claude分析
             decision = self.analyze_with_claude(
                 messages, context, target_status,
-                self.notification_history, session_status
+                self.notification_history, session_status, group_id
             )
 
             if not decision:
