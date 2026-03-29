@@ -76,7 +76,8 @@ if 全部通过 → ignore
 | plan-design-group | 需求、设计 | product, ui-designer, architect, qa |
 
 **问题映射**:
-- 环境/数据库问题 → ops-release-group (@ops)
+- 环境问题（Docker/容器/服务器）→ ops-release-group (@ops)
+- **数据库问题（Schema/数据/SQL）→ dev-working-group (@fullstack-dev)** 从源头修复
 - 代码Bug/API问题 → dev-working-group (@fullstack-dev)
 - 验收问题 → qa-acceptance-group (@qa @product)
 
