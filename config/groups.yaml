@@ -37,7 +37,7 @@ groups:
 
   plan-design-group:
     name: 规划设计群
-    room_id: "rhz3p6fepbnhxye8iq36xy6zkh"
+    room_id: "c7uuyhk5mjye8f5yhawb8mneoy"
     role: planner  # 规划者群
     target_groups:
       - dev-working-group
@@ -84,7 +84,7 @@ feishu:
 scheduler:
   # 会话超时阈值（分钟）
   session_timeout_minutes: 10
-  # 每群获取消息数量
-  messages_per_group: 20
+  # 每群获取消息数量（增加到30以避免长报告被截断）
+  messages_per_group: 30
   # 通知冷却时间（分钟）- 防止频繁通知同一群
   notification_cooldown_minutes: 30

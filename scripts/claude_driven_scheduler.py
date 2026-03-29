@@ -168,7 +168,10 @@ class ClaudeDrivenScheduler:
             logger.error(f"保存通知历史失败: {e}")
 
     def get_group_messages(self, channel_id: str, limit: int = MESSAGES_PER_GROUP) -> List[GroupMessage]:
-        """获取群消息"""
+        """获取群消息（限制总大小不超过30KB）"""
+        MAX_TOTAL_SIZE = 30 * 1024  # 30KB
+        MAX_MESSAGE_LENGTH = 2000   # 单条消息最大长度
+
         try:
             # Mattermost API v4: /api/v4/channels/{channel_id}/posts
             resp = requests.get(
@@ -182,18 +185,41 @@ class ClaudeDrivenScheduler:
 
             messages = []
             posts = data.get("posts", {})
+            total_size = 0
             # posts是字典，需要按order排序
             order = data.get("order", [])
             for post_id in reversed(order[-limit:]):  # 获取最新的N条
                 post = posts.get(post_id, {})
+                content = post.get("message", "")
+
+                # 截断过长的消息
+                if len(content) > MAX_MESSAGE_LENGTH:
+                    content = content[:MAX_MESSAGE_LENGTH] + "...[已截断]"
+
+                # 检查总大小
+                if total_size + len(content) > MAX_TOTAL_SIZE:
+                    logger.debug(f"  消息总大小达到{MAX_TOTAL_SIZE}字节限制，停止获取")
+                    break
+
                 messages.append(GroupMessage(
                     group_id=channel_id,
                     group_name="",
                     sender=post.get("user_id", ""),
-                    content=post.get("message", ""),
+                    content=content,
                     timestamp=post.get("create_at", 0) / 1000
                 ))
+                total_size += len(content)
+
             return messages
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                logger.warning(f"频道不存在或无权访问: {channel_id}，请检查 config/groups.yaml 中的 room_id 配置")
+            else:
+                logger.error(f"获取群消息失败 (HTTP {e.response.status_code}): {e}")
+            return []
+        except requests.exceptions.RequestException as e:
+            logger.error(f"网络请求失败: {e}")
+            return []
         except Exception as e:
             logger.error(f"获取群消息失败: {e}")
             return []
@@ -326,15 +352,94 @@ class ClaudeDrivenScheduler:
 
         return None
 
+    def generate_bug_document(self, decision: SchedulingDecision) -> Optional[str]:
+        """生成BUG详细文档，返回文档路径"""
+        if not decision.extracted_issues:
+            return None
+
+        # 创建BUG文档目录
+        bug_dir = PROJECT_DIR / "data" / "bugs"
+        bug_dir.mkdir(parents=True, exist_ok=True)
+
+        # 生成文档名（使用时间戳）
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        doc_file = bug_dir / f"bug_report_{timestamp}.md"
+
+        # 构建文档内容
+        content = f"""# 🐛 BUG报告 - {datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+## 📋 基本信息
+- **来源群**: {decision.source_group or '未知'}
+- **目标群**: {decision.target_group_name or '未知'}
+- **优先级**: P0（需要立即处理）
+
+## ❌ 失败项详情
+
+"""
+        # 添加每个失败项
+        for i, issue in enumerate(decision.extracted_issues, 1):
+            content += f"### {i}. {issue}\n\n"
+
+        # 添加建议行动
+        content += f"""## 📋 需要行动
+@{decision.mention_users[0] if decision.mention_users else 'dev'} 请：
+1. 查看以上失败项详情
+2. 分析根本原因
+3. 实现修复方案
+4. 修复完成后通知验收团队重新验收
+
+---
+*生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}*
+*文档路径: data/bugs/bug_report_{timestamp}.md*
+"""
+
+        # 保存文档
+        try:
+            with open(doc_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+            logger.info(f"📄 BUG文档已生成: {doc_file}")
+            return f"data/bugs/bug_report_{timestamp}.md"
+        except Exception as e:
+            logger.error(f"生成BUG文档失败: {e}")
+            return None
+
     def send_mattermost_notification(self, decision: SchedulingDecision):
-        """发送Mattermost通知"""
+        """发送Mattermost通知（复杂问题自动生成文档）"""
         target_channel = GROUPS.get(decision.target_group, {}).get("channel_id", "")
         if not target_channel:
             logger.error(f"找不到目标群: {decision.target_group}")
             return False
 
+        # 检查是否需要生成文档（问题详情超过300字符）
+        issues_content = "\n".join([f"- {i}" for i in decision.extracted_issues])
+        doc_path = None
+
+        if len(issues_content) > 300 and decision.extracted_issues:
+            doc_path = self.generate_bug_document(decision.extracted_issues, decision.target_group_name)
+
         mentions = " ".join([f"@{u}" for u in decision.mention_users])
-        message = f"{mentions}\n\n{decision.message_content}"
+
+        # 构建消息
+        if doc_path:
+            # 复杂问题：关键摘要 + 文档链接
+            key_issues = decision.extracted_issues[:3]
+            summary = "\n".join([f"- {i[:100]}..." if len(i) > 100 else f"- {i}" for i in key_issues])
+
+            message = f"""{mentions}
+
+## ❌ 验收失败项通知
+
+### 🔴 关键问题摘要
+{summary}
+
+### 📋 完整问题详情
+📄 请查看: `{doc_path}`
+
+> 💡 文档包含完整的失败原因、API路径、错误信息等
+"""
+        else:
+            # 简单问题：直接发送
+            message = f"{mentions}\n\n{decision.message_content}"
 
         try:
             resp = requests.post(
@@ -408,13 +513,15 @@ class ClaudeDrivenScheduler:
                 timeout_agents = [a for a in session_status["agents"] if a["is_timeout"]]
                 logger.info(f"  ⚠️ 检测到 {len(timeout_agents)} 个agent会话超时")
 
-            # 获取目标群状态
+            # 获取目标群状态（增加消息数量以获取完整验收报告）
             target_groups = group_config.get("target_groups", [])
             target_status = {}
             for target_id in target_groups:
                 if target_id in GROUPS:
+                    # 验收群获取20条消息，其他群获取5条
+                    limit = 20 if "acceptance" in target_id or "qa" in target_id else 5
                     target_status[target_id] = self.get_group_messages(
-                        GROUPS[target_id]["channel_id"], limit=5
+                        GROUPS[target_id]["channel_id"], limit=limit
                     )
 
             # 构建上下文
