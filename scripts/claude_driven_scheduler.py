@@ -239,64 +239,55 @@ class ClaudeDrivenScheduler:
             logger.error(f"获取群消息失败: {e}")
             return []
 
-    def get_agent_last_message(self, channel_id: str, agent_name: str) -> Optional[str]:
-        """直接从Mattermost API获取指定agent的最后一条完整消息"""
+    def get_source_group_raw_messages(self, channel_id: str, limit: int = 5) -> str:
+        """直接从Mattermost API获取来源群最近N条完整消息（逐字复制，不丢失任何内容）"""
         try:
-            # 获取频道成员信息，找到agent的user_id
-            members_resp = requests.get(
-                f"{MM_URL}/api/v4/channels/{channel_id}/members",
-                headers=self.headers,
-                timeout=10
-            )
-            if members_resp.status_code != 200:
-                logger.debug(f"获取频道成员失败: {members_resp.status_code}")
-                return None
+            # 获取用户名缓存
+            username_cache = {}
 
-            members = members_resp.json()
-            agent_user_id = None
-            for member in members:
-                # 通过用户名匹配
-                user_id = member.get("user_id", "")
-                # 获取用户信息
-                user_resp = requests.get(
-                    f"{MM_URL}/api/v4/users/{user_id}",
-                    headers=self.headers,
-                    timeout=10
-                )
-                if user_resp.status_code == 200:
-                    user_data = user_resp.json()
-                    if user_data.get("username", "").lower() == agent_name.lower():
-                        agent_user_id = user_id
-                        break
-
-            if not agent_user_id:
-                logger.debug(f"未找到agent用户: {agent_name}")
-                return None
-
-            # 获取该用户在频道中的最后一条消息
-            posts_resp = requests.get(
+            resp = requests.get(
                 f"{MM_URL}/api/v4/channels/{channel_id}/posts",
                 headers=self.headers,
-                params={"page": 0, "per_page": 30},
+                params={"page": 0, "per_page": limit},
                 timeout=10
             )
-            if posts_resp.status_code != 200:
-                return None
+            if resp.status_code != 200:
+                logger.error(f"获取来源群消息失败: HTTP {resp.status_code}")
+                return ""
 
-            data = posts_resp.json()
+            data = resp.json()
             posts = data.get("posts", {})
             order = data.get("order", [])
 
-            # 找到该agent的最后一条消息
-            for post_id in reversed(order):
+            raw_parts = []
+            for post_id in reversed(order[-limit:]):
                 post = posts.get(post_id, {})
-                if post.get("user_id") == agent_user_id:
-                    return post.get("message", "")
+                user_id = post.get("user_id", "")
+                content = post.get("message", "")
+                ts = datetime.fromtimestamp(post.get("create_at", 0) / 1000).strftime("%H:%M:%S")
 
-            return None
+                # 获取用户名
+                if user_id not in username_cache:
+                    try:
+                        user_resp = requests.get(
+                            f"{MM_URL}/api/v4/users/{user_id}",
+                            headers=self.headers,
+                            timeout=5
+                        )
+                        if user_resp.status_code == 200:
+                            username_cache[user_id] = user_resp.json().get("username", user_id)
+                        else:
+                            username_cache[user_id] = user_id
+                    except:
+                        username_cache[user_id] = user_id
+
+                username = username_cache[user_id]
+                raw_parts.append(f"[{ts}] {username}:\n{content}")
+
+            return "\n\n---\n\n".join(raw_parts)
         except Exception as e:
-            logger.error(f"获取agent最后消息失败: {e}")
-            return None
+            logger.error(f"获取来源群原始消息失败: {e}")
+            return ""
 
     def get_last_assistant_message_time(self, jsonl_file: Path) -> Optional[datetime]:
         """从jsonl文件中获取最后一条assistant消息的时间"""
@@ -381,32 +372,19 @@ class ClaudeDrivenScheduler:
                            session_status: Dict, source_group: str = "") -> Optional[SchedulingDecision]:
         """使用Claude分析并决策"""
 
-        # 构建消息摘要（用于快速理解）
+        # 构建消息摘要
         msg_summary = "\n".join([
-            f"- [{datetime.fromtimestamp(m.timestamp).strftime('%H:%M')}] {m.sender}: {m.content[:100]}"
+            f"- [{datetime.fromtimestamp(m.timestamp).strftime('%H:%M')}] {m.sender}: {m.content[:150]}"
             for m in messages[-20:]
-        ])
-
-        # 构建完整原始消息（用于提取raw_messages）
-        raw_messages_full = "\n\n---\n\n".join([
-            f"[{datetime.fromtimestamp(m.timestamp).strftime('%H:%M:%S')}] {m.sender}:\n{m.content}"
-            for m in messages[-10:]  # 最近10条完整消息
         ])
 
         # 构建目标群状态
         target_status = ""
-        target_raw_messages = ""
         for group_id, msgs in target_groups_status.items():
             group_name = GROUPS.get(group_id, {}).get("name", group_id)
             target_status += f"\n### {group_name}:\n"
             for m in msgs[-5:]:
                 target_status += f"- [{datetime.fromtimestamp(m.timestamp).strftime('%H:%M')}] {m.sender}: {m.content[:80]}\n"
-            # 目标群的完整原始消息
-            target_raw_messages += f"\n\n### {group_name} 完整消息:\n"
-            target_raw_messages += "\n\n---\n\n".join([
-                f"[{datetime.fromtimestamp(m.timestamp).strftime('%H:%M:%S')}] {m.sender}:\n{m.content}"
-                for m in msgs[-5:]
-            ])
 
         # 构建通知历史
         history_str = ""
@@ -429,24 +407,15 @@ class ClaudeDrivenScheduler:
 
 {session_info}
 
-## 当前分析群组消息摘要 (最近20条):
+## 当前分析群组消息 (最近20条):
 {msg_summary}
 
-## 目标群最新状态摘要:
+## 目标群最新状态:
 {target_status}
 
 {history_str}
 
----
-## 📋 完整原始消息内容（用于逐字复制到raw_messages字段）
-
-### 当前群完整消息:
-{raw_messages_full}
-{target_raw_messages}
-
----
-
-请分析以上信息，做出调度决策。**重要**：如果需要通知，必须从"完整原始消息内容"区域逐字复制相关内容到raw_messages字段。"""
+请分析以上信息，做出调度决策。注意：raw_messages字段不需要填写，系统会自动从API获取。"""
 
         try:
             resp = requests.post(
@@ -459,20 +428,46 @@ class ClaudeDrivenScheduler:
                         {"role": "user", "content": user_prompt}
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 1000
+                    "max_tokens": 2000
                 },
-                timeout=30
+                timeout=60
             )
             resp.raise_for_status()
             data = resp.json()
 
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            logger.debug(f"AI返回内容: {content[:200]}")
 
-            # 解析JSON
+            # 解析JSON - 处理截断的JSON
             import re
             json_match = re.search(r'\{[\s\S]*\}', content)
+            if not json_match:
+                # 尝试修复截断的JSON
+                json_match = re.search(r'\{[\s\S]*', content)
+
             if json_match:
-                decision_data = json.loads(json_match.group())
+                json_str = json_match.group()
+                # 如果JSON不完整（没有闭合的}），尝试补全
+                if not json_str.rstrip().endswith('}'):
+                    # 找到最后一个完整的键值对
+                    # 尝试在最后一个逗号或冒号处截断并闭合
+                    for i in range(len(json_str) - 1, -1, -1):
+                        if json_str[i] in ['"', ']']:
+                            # 找到闭合位置
+                            brace_count = 0
+                            for j in range(i, -1, -1):
+                                if json_str[j] == '}': brace_count += 1
+                                if json_str[j] == '{': brace_count -= 1
+                            json_str = json_str[:i+1] + '}'
+                            break
+                    logger.warning(f"JSON被截断，尝试修复")
+
+                try:
+                    decision_data = json.loads(json_str)
+                except json.JSONDecodeError:
+                    logger.error(f"JSON解析失败，原始内容: {json_str[:300]}")
+                    return None
+
                 return SchedulingDecision(
                     action=decision_data.get("action", "wait"),
                     target_group=decision_data.get("target_group", ""),
@@ -482,8 +477,8 @@ class ClaudeDrivenScheduler:
                     message_content=decision_data.get("message_content", ""),
                     reasoning=decision_data.get("reasoning", ""),
                     source_group=source_group,
-                    raw_messages=decision_data.get("raw_messages", ""),
-                    qa_raw_messages=decision_data.get("qa_raw_messages", decision_data.get("raw_messages", "")),
+                    raw_messages="",
+                    qa_raw_messages="",
                     bug_doc_complete=decision_data.get("bug_doc_complete", True)
                 )
         except Exception as e:
@@ -841,14 +836,13 @@ data/bugs/TC-XXX_description.md
                     logger.info(f"  ⏭ 跳过 {decision.target_group_name} - 已在本轮通知过")
                     continue
 
-                # 🔑 关键：直接从API获取来源群中第一个mention_agent的最后一条完整消息
-                if decision.mention_users:
-                    source_channel_id = GROUPS.get(decision.source_group, {}).get("channel_id", "")
-                    first_agent = decision.mention_users[0]
-                    agent_raw_msg = self.get_agent_last_message(source_channel_id, first_agent)
-                    if agent_raw_msg:
-                        decision.agent_raw_message = agent_raw_msg
-                        logger.info(f"  📥 直接获取 {first_agent} 的最后消息 ({len(agent_raw_msg)}字符)")
+                # 🔑 关键：直接从API获取来源群最近消息，保证原始内容不丢失
+                source_channel_id = GROUPS.get(decision.source_group, {}).get("channel_id", "")
+                if source_channel_id:
+                    raw_msgs = self.get_source_group_raw_messages(source_channel_id, limit=5)
+                    if raw_msgs:
+                        decision.agent_raw_message = raw_msgs
+                        logger.info(f"  📥 获取来源群原始消息 ({len(raw_msgs)}字符)")
 
                 # 发送通知
                 if self.send_mattermost_notification(decision):
