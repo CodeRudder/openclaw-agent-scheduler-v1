@@ -621,16 +621,46 @@ class ClaudeDrivenScheduler:
     def send_mattermost_notification(self, decision: SchedulingDecision):
         """发送Mattermost通知（复杂问题自动生成文档）"""
 
-        # 检查文档是否完整
+        # 检查问题是否已在目标群确认为已解决（避免重复通知QA）
         if not decision.bug_doc_complete and decision.extracted_issues:
-            # 文档不完整 → 通知验收群重新生成
-            logger.warning("⚠️ BUG文档不完整，通知QA重新生成")
-            target_group = "qa-acceptance-group"
-            target_channel = GROUPS.get(target_group, {}).get("channel_id", "")
-            mention_users = GROUPS.get(target_group, {}).get("agents", [])
-            mentions = " ".join([f"@{u.lstrip('@')}" for u in mention_users])
+            # 检查目标群最新消息中是否包含"已修复"/"已解决"/"验证通过"等关键词
+            target_channel = GROUPS.get(decision.target_group, {}).get("channel_id", "")
+            if target_channel:
+                target_msgs = self.get_group_messages(target_channel, limit=10)
+                resolved_keywords = ["已修复", "已解决", "验证通过", "已确认", "✅ 已通过", "修复完成"]
+                all_resolved = True
+                for issue in decision.extracted_issues:
+                    issue_found_resolved = False
+                    for msg in target_msgs:
+                        msg_lower = msg.content.lower()
+                        issue_lower = issue.lower()
+                        if any(kw in msg_lower for kw in resolved_keywords):
+                            # 检查这条消息是否与该issue相关（包含TC编号或关键词）
+                            issue_keywords = issue_lower.split()
+                            if any(k in msg_lower for k in issue_keywords if len(k) > 3):
+                                issue_found_resolved = True
+                                break
+                    if not issue_found_resolved:
+                        all_resolved = False
+                        break
 
-            message = f"""{mentions}
+                if all_resolved:
+                    logger.info(f"  ✅ 所有问题在目标群已确认为已解决，跳过BUG不完整通知")
+                    # 问题已解决，改为正常通知流程
+                    decision.bug_doc_complete = True
+                    # 不生成BUG文档，直接通知目标群"问题已解决"
+                    decision.extracted_issues = []  # 清空issues避免生成文档
+                    decision.message_content = "问题已确认解决，无需额外操作。"
+
+            if not decision.bug_doc_complete and decision.extracted_issues:
+                # 文档不完整 → 通知验收群重新生成
+                logger.warning("⚠️ BUG文档不完整，通知QA重新生成")
+                target_group = "qa-acceptance-group"
+                target_channel = GROUPS.get(target_group, {}).get("channel_id", "")
+                mention_users = GROUPS.get(target_group, {}).get("agents", [])
+                mentions = " ".join([f"@{u.lstrip('@')}" for u in mention_users])
+
+                message = f"""{mentions}
 
 ## ⚠️ BUG报告不完整，请重新生成
 
