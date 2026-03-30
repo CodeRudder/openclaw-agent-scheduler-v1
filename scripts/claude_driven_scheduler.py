@@ -935,13 +935,17 @@ data/bugs/TC-XXX_description.md
                     notifications_sent += 1
                     notified_groups.add(decision.target_group)
 
-                    # 记录历史
-                    self.notification_history.setdefault("history", []).append({
+                    # 记录历史（只保留最后20条）
+                    history = self.notification_history.setdefault("history", [])
+                    history.append({
                         "timestamp": datetime.now().isoformat(),
                         "source_group": group_id,
                         "target_group": decision.target_group,
                         "reason": decision.reasoning[:100]
                     })
+                    # 只保留最后20条
+                    if len(history) > 20:
+                        self.notification_history["history"] = history[-20:]
                     self._save_notification_history()
                     logger.info(f"📝 已记录通知历史 → {group_id}")
 
