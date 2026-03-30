@@ -239,6 +239,77 @@ class ClaudeDrivenScheduler:
             logger.error(f"获取群消息失败: {e}")
             return []
 
+    def get_agent_user_id(self, agent_name: str) -> Optional[str]:
+        """通过用户名获取agent的user_id"""
+        try:
+            # 去除@前缀
+            clean_name = agent_name.lstrip('@').lower()
+
+            # 获取所有用户列表，通过用户名匹配
+            resp = requests.get(
+                f"{MM_URL}/api/v4/users",
+                headers=self.headers,
+                params={"page": 0, "per_page": 200},
+                timeout=10
+            )
+            if resp.status_code != 200:
+                logger.error(f"获取用户列表失败: HTTP {resp.status_code}")
+                return None
+
+            users = resp.json()
+            for user in users:
+                if user.get("username", "").lower() == clean_name:
+                    return user.get("id")
+
+            logger.debug(f"未找到用户: {agent_name}")
+            return None
+        except Exception as e:
+            logger.error(f"获取agent user_id失败: {e}")
+            return None
+
+    def get_agent_last_raw_message(self, channel_id: str, agent_name: str) -> str:
+        """获取指定agent在频道中的最后一条完整消息（检查发送人，不是消息内容）"""
+        try:
+            # 1. 获取agent的user_id
+            agent_user_id = self.get_agent_user_id(agent_name)
+            logger.debug(f"🔍 查找agent '{agent_name}' 的user_id: {agent_user_id}")
+            if not agent_user_id:
+                logger.warning(f"⚠️ 无法找到agent用户: {agent_name}")
+                return ""
+
+            # 2. 获取频道消息
+            resp = requests.get(
+                f"{MM_URL}/api/v4/channels/{channel_id}/posts",
+                headers=self.headers,
+                params={"page": 0, "per_page": 50},
+                timeout=10
+            )
+            if resp.status_code != 200:
+                logger.error(f"获取频道消息失败: HTTP {resp.status_code}")
+                return ""
+
+            data = resp.json()
+            posts = data.get("posts", {})
+            order = data.get("order", [])
+            logger.debug(f"🔍 频道消息数: {len(posts)}, agent_user_id: {agent_user_id}")
+
+            # 3. 找到该agent发送的最后一条消息（检查发送人user_id）
+            for post_id in reversed(order):
+                post = posts.get(post_id, {})
+                post_user_id = post.get("user_id", "")
+                logger.debug(f"  检查消息: post_user_id={post_user_id}, 匹配={post_user_id == agent_user_id}")
+                if post_user_id == agent_user_id:
+                    content = post.get("message", "")
+                    ts = datetime.fromtimestamp(post.get("create_at", 0) / 1000).strftime("%Y-%m-%d %H:%M:%S")
+                    logger.info(f"  📥 找到 {agent_name} 的消息 (发送人ID匹配, {len(content)}字符)")
+                    return f"[{ts}] {agent_name}:\n{content}"
+
+            logger.warning(f"⚠️ 频道中未找到 {agent_name} 发送的消息 (user_id: {agent_user_id})")
+            return ""
+        except Exception as e:
+            logger.error(f"获取agent消息失败: {e}")
+            return ""
+
     def get_source_group_raw_messages(self, channel_id: str, limit: int = 5) -> str:
         """直接从Mattermost API获取来源群最近N条完整消息（逐字复制，不丢失任何内容）"""
         try:
@@ -836,13 +907,27 @@ data/bugs/TC-XXX_description.md
                     logger.info(f"  ⏭ 跳过 {decision.target_group_name} - 已在本轮通知过")
                     continue
 
-                # 🔑 关键：直接从API获取来源群最近消息，保证原始内容不丢失
+                # 🔑 关键：获取来源群的原始消息内容
+                # 1. 首先尝试获取mention_agent的最后一条消息（检查发送人user_id）
+                # 2. 如果agent没有发送过消息，则获取来源群所有最近消息
                 source_channel_id = GROUPS.get(decision.source_group, {}).get("channel_id", "")
                 if source_channel_id:
-                    raw_msgs = self.get_source_group_raw_messages(source_channel_id, limit=5)
-                    if raw_msgs:
-                        decision.agent_raw_message = raw_msgs
-                        logger.info(f"  📥 获取来源群原始消息 ({len(raw_msgs)}字符)")
+                    raw_msg = ""
+                    if decision.mention_users:
+                        # 尝试获取agent的最后一条消息
+                        first_agent = decision.mention_users[0].lstrip('@')
+                        raw_msg = self.get_agent_last_raw_message(source_channel_id, first_agent)
+                        if raw_msg:
+                            logger.info(f"  📥 获取 {first_agent} 的原始消息 ({len(raw_msg)}字符)")
+
+                    # 如果agent没有发送过消息，获取来源群所有最近消息
+                    if not raw_msg:
+                        raw_msg = self.get_source_group_raw_messages(source_channel_id, limit=5)
+                        if raw_msg:
+                            logger.info(f"  📥 获取来源群最近消息 ({len(raw_msg)}字符)")
+
+                    if raw_msg:
+                        decision.agent_raw_message = raw_msg
 
                 # 发送通知
                 if self.send_mattermost_notification(decision):
