@@ -1,8 +1,9 @@
 *.log
 logs
 
+bugs
 node_modules
-
+__pycache__
 
 # 环境变量文件
 .env

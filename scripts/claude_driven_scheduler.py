@@ -86,7 +86,7 @@ AGENT_ROLES = CONFIG.get("agent_roles", {"executors": [], "advisors": []})
 
 # Mattermost配置
 MM_URL = CONFIG.get("mattermost", {}).get("url", "http://localhost:8066")
-MM_TOKEN = os.environ.get("MATTERMOST_TOKEN", "owwch961rjyn9ctj3qth7j9gra")
+MM_TOKEN = os.environ.get("MATTERMOST_TOKEN", "ex7dwb5j6fruzmjtjjuk34777r")
 
 # LiteLLM配置
 LITELLM_URL = CONFIG.get("litellm", {}).get("url", "http://localhost:4000")
@@ -183,52 +183,120 @@ class ClaudeDrivenScheduler:
             logger.error(f"保存通知历史失败: {e}")
 
     def get_group_messages(self, channel_id: str, limit: int = MESSAGES_PER_GROUP) -> List[GroupMessage]:
-        """获取群消息（限制总大小不超过30KB）"""
+        """获取群消息 - 只提取群成员消息，每成员最后5条，忽略admin/bot消息"""
         MAX_TOTAL_SIZE = 30 * 1024  # 30KB
         MAX_MESSAGE_LENGTH = 2000   # 单条消息最大长度
+        MESSAGES_PER_MEMBER = 5     # 每个成员最多取5条
+
+        # 获取admin用户名
+        admin_usernames = {"claw-admin", "claw-scheduler", "admin", "bot"}
+        admin_user_ids = set()
 
         try:
-            # Mattermost API v4: /api/v4/channels/{channel_id}/posts
+            resp = requests.get(
+                f"{MM_URL}/api/v4/users",
+                headers=self.headers,
+                params={"page": 0, "per_page": 200},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                for user in resp.json():
+                    if user.get("username", "").lower() in admin_usernames:
+                        admin_user_ids.add(user.get("id"))
+        except:
+            pass
+
+        # 获取当前群的agent成员列表
+        group_agents = set()
+        for gid, gcfg in GROUPS.items():
+            if gcfg.get("channel_id") == channel_id:
+                group_agents = set(a.lstrip('@').lower() for a in gcfg.get("agents", []))
+                break
+
+        # 获取agent的user_id集合
+        agent_user_id_map = {}  # user_id -> agent_name
+        try:
+            resp = requests.get(
+                f"{MM_URL}/api/v4/users",
+                headers=self.headers,
+                params={"page": 0, "per_page": 200},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                for user in resp.json():
+                    uname = user.get("username", "").lower()
+                    if uname in group_agents:
+                        agent_user_id_map[user.get("id")] = uname
+        except:
+            pass
+
+        try:
             resp = requests.get(
                 f"{MM_URL}/api/v4/channels/{channel_id}/posts",
                 headers=self.headers,
-                params={"page": 0, "per_page": limit},
+                params={"page": 0, "per_page": limit * 2},  # 多取一些再过滤
                 timeout=10
             )
             resp.raise_for_status()
             data = resp.json()
 
-            messages = []
+            # 收集所有消息，按sender分组
+            member_messages = {}  # user_id -> [GroupMessage, ...]
             posts = data.get("posts", {})
-            total_size = 0
-            # posts是字典，需要按order排序
             order = data.get("order", [])
-            for post_id in reversed(order[-limit:]):  # 获取最新的N条
+
+            for post_id in reversed(order):
                 post = posts.get(post_id, {})
+                user_id = post.get("user_id", "")
                 content = post.get("message", "")
+
+                # 忽略admin/bot消息
+                if user_id in admin_user_ids:
+                    continue
+
+                # 只保留群成员消息
+                if user_id not in agent_user_id_map:
+                    continue
 
                 # 截断过长的消息
                 if len(content) > MAX_MESSAGE_LENGTH:
                     content = content[:MAX_MESSAGE_LENGTH] + "...[已截断]"
 
-                # 检查总大小
-                if total_size + len(content) > MAX_TOTAL_SIZE:
-                    logger.debug(f"  消息总大小达到{MAX_TOTAL_SIZE}字节限制，停止获取")
-                    break
-
-                messages.append(GroupMessage(
+                msg = GroupMessage(
                     group_id=channel_id,
                     group_name="",
-                    sender=post.get("user_id", ""),
+                    sender=agent_user_id_map[user_id],
                     content=content,
                     timestamp=post.get("create_at", 0) / 1000
-                ))
-                total_size += len(content)
+                )
 
-            return messages
+                if user_id not in member_messages:
+                    member_messages[user_id] = []
+                member_messages[user_id].append(msg)
+
+            # 每个成员只保留最后5条
+            all_messages = []
+            for uid, msgs in member_messages.items():
+                all_messages.extend(msgs[-MESSAGES_PER_MEMBER:])
+
+            # 按时间排序
+            all_messages.sort(key=lambda m: m.timestamp)
+
+            # 限制总大小
+            result = []
+            total_size = 0
+            for msg in all_messages:
+                if total_size + len(msg.content) > MAX_TOTAL_SIZE:
+                    break
+                result.append(msg)
+                total_size += len(msg.content)
+
+            logger.info(f"  提取成员消息: {len(member_messages)}个成员, {len(result)}条消息")
+            return result
+
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                logger.warning(f"频道不存在或无权访问: {channel_id}，请检查 config/groups.yaml 中的 room_id 配置")
+                logger.warning(f"频道不存在或无权访问: {channel_id}")
             else:
                 logger.error(f"获取群消息失败 (HTTP {e.response.status_code}): {e}")
             return []
@@ -457,12 +525,19 @@ class ClaudeDrivenScheduler:
             for m in msgs[-5:]:
                 target_status += f"- [{datetime.fromtimestamp(m.timestamp).strftime('%H:%M')}] {m.sender}: {m.content[:80]}\n"
 
-        # 构建通知历史
+        # 构建通知历史（包含详细内容供AI判断重复）
         history_str = ""
         if notification_history.get("history"):
-            history_str = "### 最近通知记录:\n"
-            for h in notification_history["history"][-5:]:
-                history_str += f"- {h.get('timestamp', '')}: 通知{h.get('target', '')} - {h.get('reason', '')[:50]}\n"
+            history_str = "### 最近通知记录（请仔细检查是否有重复通知模式）:\n"
+            for h in notification_history["history"][-10:]:
+                issues_str = ", ".join(h.get("extracted_issues", []))[:100]
+                history_str += (
+                    f"- [{h.get('timestamp', '')[-8:]}] "
+                    f"{h.get('source_group', '')} → {h.get('target_group_name', '')} "
+                    f"@{','.join(h.get('mention_users', []))}: "
+                    f"问题=[{issues_str}] "
+                    f"内容={h.get('message_content', '')[:80]}\n"
+                )
 
         # 构建会话超时信息
         session_info = ""
@@ -557,6 +632,58 @@ class ClaudeDrivenScheduler:
 
         return None
 
+    def review_raw_message_with_ai(self, raw_content: str, decision: SchedulingDecision) -> str:
+        """让AI审核并处理转发的原始消息，确保内容准确无歧义"""
+        if not raw_content:
+            return raw_content
+
+        # 如果消息很短且是简单通知（如版本闭环），不需要AI审核
+        if len(raw_content) < 100 and not decision.extracted_issues:
+            return raw_content
+
+        review_prompt = f"""你是项目消息审核员。请审核以下要转发给其他群的消息内容，确保：
+1. 内容准确，不含过时信息（已解决的问题不要描述为未解决）
+2. 不含歧义或模糊表述
+3. 不含混乱的混合内容（旧的失败通知混杂新的修复确认）
+4. 保留关键细节（API路径、错误码、账号密码、操作步骤等）
+5. 如果原始内容混乱，整理成清晰的结构
+
+## 通知目标
+- 目标群: {decision.target_group_name}
+- @对象: {', '.join(decision.mention_users)}
+- 通知意图: {decision.message_content}
+
+## 待审核的原始消息内容:
+{raw_content}
+
+请直接输出审核后的消息内容（不需要解释审核过程）。如果内容合理无需修改，直接原样返回。如果需要修改，输出修改后的版本。"""
+
+        try:
+            resp = requests.post(
+                f"{LITELLM_URL}/v1/chat/completions",
+                headers=self.llm_headers,
+                json={
+                    "model": LITELLM_MODEL,
+                    "messages": [{"role": "user", "content": review_prompt}],
+                    "temperature": 0.2,
+                    "max_tokens": 2000
+                },
+                timeout=30
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            reviewed = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+            if reviewed:
+                logger.info(f"  🔍 AI审核消息完成 (原始{len(raw_content)}字 → 审核{len(reviewed)}字)")
+                return reviewed
+            else:
+                logger.warning("  ⚠️ AI审核返回为空，使用原始消息")
+                return raw_content
+        except Exception as e:
+            logger.warning(f"  ⚠️ AI审核失败: {e}，使用原始消息")
+            return raw_content
+
     def generate_bug_document(self, decision: SchedulingDecision) -> Optional[str]:
         """生成BUG详细文档，使用QA原始消息，返回文档路径"""
         if not decision.extracted_issues:
@@ -619,48 +746,17 @@ class ClaudeDrivenScheduler:
             return None
 
     def send_mattermost_notification(self, decision: SchedulingDecision):
-        """发送Mattermost通知（复杂问题自动生成文档）"""
+        """发送Mattermost通知（AI已做决策，代码只负责发送）"""
 
-        # 检查问题是否已在目标群确认为已解决（避免重复通知QA）
+        # AI判断BUG文档不完整 → 通知QA补充
         if not decision.bug_doc_complete and decision.extracted_issues:
-            # 检查目标群最新消息中是否包含"已修复"/"已解决"/"验证通过"等关键词
-            target_channel = GROUPS.get(decision.target_group, {}).get("channel_id", "")
-            if target_channel:
-                target_msgs = self.get_group_messages(target_channel, limit=10)
-                resolved_keywords = ["已修复", "已解决", "验证通过", "已确认", "✅ 已通过", "修复完成"]
-                all_resolved = True
-                for issue in decision.extracted_issues:
-                    issue_found_resolved = False
-                    for msg in target_msgs:
-                        msg_lower = msg.content.lower()
-                        issue_lower = issue.lower()
-                        if any(kw in msg_lower for kw in resolved_keywords):
-                            # 检查这条消息是否与该issue相关（包含TC编号或关键词）
-                            issue_keywords = issue_lower.split()
-                            if any(k in msg_lower for k in issue_keywords if len(k) > 3):
-                                issue_found_resolved = True
-                                break
-                    if not issue_found_resolved:
-                        all_resolved = False
-                        break
+            logger.warning("⚠️ AI判定BUG文档不完整，通知QA重新生成")
+            target_group = "qa-acceptance-group"
+            target_channel = GROUPS.get(target_group, {}).get("channel_id", "")
+            mention_users = GROUPS.get(target_group, {}).get("agents", [])
+            mentions = " ".join([f"@{u.lstrip('@')}" for u in mention_users])
 
-                if all_resolved:
-                    logger.info(f"  ✅ 所有问题在目标群已确认为已解决，跳过BUG不完整通知")
-                    # 问题已解决，改为正常通知流程
-                    decision.bug_doc_complete = True
-                    # 不生成BUG文档，直接通知目标群"问题已解决"
-                    decision.extracted_issues = []  # 清空issues避免生成文档
-                    decision.message_content = "问题已确认解决，无需额外操作。"
-
-            if not decision.bug_doc_complete and decision.extracted_issues:
-                # 文档不完整 → 通知验收群重新生成
-                logger.warning("⚠️ BUG文档不完整，通知QA重新生成")
-                target_group = "qa-acceptance-group"
-                target_channel = GROUPS.get(target_group, {}).get("channel_id", "")
-                mention_users = GROUPS.get(target_group, {}).get("agents", [])
-                mentions = " ".join([f"@{u.lstrip('@')}" for u in mention_users])
-
-                message = f"""{mentions}
+            message = f"""{mentions}
 
 ## ⚠️ BUG报告不完整，请重新生成
 
@@ -706,22 +802,20 @@ data/bugs/TC-XXX_description.md
                 logger.error(f"找不到目标群: {decision.target_group}")
                 return False
 
-            # 验收问题必须生成文档
+            # 验收问题生成文档
             doc_path = None
             if decision.extracted_issues:
                 doc_path = self.generate_bug_document(decision)
 
             mentions = " ".join([f"@{u.lstrip('@')}" for u in decision.mention_users])
 
-            # 获取原始消息内容（优先使用API直接获取的完整消息）
+            # 获取原始消息内容
             raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
 
-            # 构建消息（有文档时附带文档路径，但仍包含关键原始内容）
+            # 构建消息
             if doc_path:
                 key_issues = decision.extracted_issues[:3]
                 summary = "\n".join([f"- {i[:100]}..." if len(i) > 100 else f"- {i}" for i in key_issues])
-
-                # 截取原始消息关键部分（保留账号密码等细节）
                 raw_preview = raw_content[:1500] if raw_content else ""
 
                 message = f"""{mentions}
@@ -739,8 +833,6 @@ data/bugs/TC-XXX_description.md
 详见: `{doc_path}`
 """
             else:
-                # 无文档时，直接包含原始消息内容
-                raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
                 if raw_content:
                     message = f"""{mentions}
 
@@ -944,13 +1036,11 @@ data/bugs/TC-XXX_description.md
                 if source_channel_id:
                     raw_msg = ""
                     if decision.mention_users:
-                        # 尝试获取agent的最后一条消息
                         first_agent = decision.mention_users[0].lstrip('@')
                         raw_msg = self.get_agent_last_raw_message(source_channel_id, first_agent)
                         if raw_msg:
                             logger.info(f"  📥 获取 {first_agent} 的原始消息 ({len(raw_msg)}字符)")
 
-                    # 如果agent没有发送过消息，获取来源群所有最近消息
                     if not raw_msg:
                         raw_msg = self.get_source_group_raw_messages(source_channel_id, limit=5)
                         if raw_msg:
@@ -959,18 +1049,28 @@ data/bugs/TC-XXX_description.md
                     if raw_msg:
                         decision.agent_raw_message = raw_msg
 
+                # 🔍 AI审核转发消息，确保内容准确无歧义
+                raw_for_review = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
+                if raw_for_review:
+                    reviewed = self.review_raw_message_with_ai(raw_for_review, decision)
+                    decision.agent_raw_message = reviewed
+
                 # 发送通知
                 if self.send_mattermost_notification(decision):
                     self.send_feishu_notification(decision)
                     notifications_sent += 1
                     notified_groups.add(decision.target_group)
 
-                    # 记录历史（只保留最后20条）
+                    # 记录历史（只保留最后20条，包含更多上下文供AI判断重复）
                     history = self.notification_history.setdefault("history", [])
                     history.append({
                         "timestamp": datetime.now().isoformat(),
                         "source_group": group_id,
                         "target_group": decision.target_group,
+                        "target_group_name": decision.target_group_name,
+                        "mention_users": decision.mention_users,
+                        "extracted_issues": decision.extracted_issues[:5],
+                        "message_content": decision.message_content[:200],
                         "reason": decision.reasoning[:100]
                     })
                     # 只保留最后20条
