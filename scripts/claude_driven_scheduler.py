@@ -854,6 +854,77 @@ class ClaudeDrivenScheduler:
         if handled == 0:
             logger.info("  ✅ 所有阻塞任务的agent会话均活跃，无需激活")
 
+    def check_stopped_sessions(self, all_session_status: Dict[str, Dict], analysis: Dict):
+        """独立检查所有agent会话是否异常停止，不依赖AI的blocking_tasks
+
+        检查条件：
+        1. AI分析中该agent有任务且状态为"处理中"
+        2. 会话stopReason为stop/error/aborted
+
+        满足条件则立即发送询问消息
+        """
+        handled = 0
+
+        # 从AI分析中获取所有"处理中"的任务
+        active_tasks = {}  # (group_id, agent_name) -> task_desc
+        if analysis:
+            for task in analysis.get("tasks", []):
+                status = task.get("status", "")
+                if status in ("处理中", "超时"):
+                    # 需要从group_name反查group_id
+                    group_name = task.get("group", "")
+                    agent_name = task.get("agent", "")
+                    task_desc = task.get("task", "")
+
+                    group_id = None
+                    for gid, gcfg in GROUPS.items():
+                        if gcfg.get("name") == group_name:
+                            group_id = gid
+                            break
+
+                    if group_id and agent_name:
+                        active_tasks[(group_id, agent_name)] = task_desc
+
+        if not active_tasks:
+            logger.info("  ✅ 无处理中的任务")
+            return
+
+        # 检查每个有活跃任务的agent的会话状态
+        for group_id, agent_name in active_tasks:
+            task_desc = active_tasks[(group_id, agent_name)]
+            group_name = GROUPS.get(group_id, {}).get("name", group_id)
+
+            # 从session_status中查找该agent
+            session_status = all_session_status.get(group_id, {})
+            agent_status = None
+            for a in session_status.get("agents", []):
+                if a.get("name") == agent_name:
+                    agent_status = a
+                    break
+
+            if not agent_status:
+                continue
+
+            stop_reason = agent_status.get("stop_reason")
+
+            # 检查stopReason是否为异常值
+            if stop_reason in ("stop", "aborted", "error"):
+                logger.info(f"\n  📋 会话异常停止: {group_name}-{agent_name}")
+                logger.info(f"     任务: {task_desc[:50]}...")
+                logger.info(f"     stopReason={stop_reason} → 发送询问消息")
+
+                if stop_reason == "stop":
+                    self.send_task_inquiry_message(group_id, agent_name, task_desc)
+                else:
+                    # aborted/error 发送激活消息
+                    self.send_activation_message(group_id, agent_name)
+
+                self.clear_activation_attempt(group_id, agent_name)
+                handled += 1
+
+        if handled == 0:
+            logger.info("  ✅ 所有处理中任务的会话状态正常")
+
     def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
                            all_session_status: Dict[str, Dict],
                            notification_history: Dict,
@@ -1457,6 +1528,11 @@ data/bugs/TC-XXX_description.md
         blocking_tasks = analysis.get("blocking_tasks", []) if analysis else []
         logger.info(f"\n🔍 处理阻塞任务...")
         self.handle_timeout_agents(blocking_tasks)
+
+        # ========== 第二步半b：独立检查会话异常停止 ==========
+        # 不依赖AI的blocking_tasks，直接扫描所有有任务且会话异常的agent
+        logger.info(f"\n🔍 检查会话异常停止...")
+        self.check_stopped_sessions(all_session_status, analysis)
 
         if not decisions:
             logger.info("  ✅ 无需跨群通知")
