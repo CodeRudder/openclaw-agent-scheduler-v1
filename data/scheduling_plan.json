@@ -21,24 +21,32 @@
     {
       "id": "M3",
       "name": "V5.9技术方案评审",
-      "status": "pending",
-      "progress": "等待架构师进行技术评审，architect会话异常需恢复",
+      "status": "completed",
+      "progress": "架构师技术评审已通过，技术方案已就绪（40KB），开发工作量评估27天",
       "assigned_to": "architect",
-      "updated_at": "2026-04-01 22:14"
+      "updated_at": "2026-04-01 22:26"
     },
     {
       "id": "M4",
+      "name": "V5.9 UI设计",
+      "status": "blocked",
+      "progress": "UI设计师超时584分钟无响应，设计工作未启动",
+      "assigned_to": "ui-designer",
+      "updated_at": "2026-04-01 22:26"
+    },
+    {
+      "id": "M5",
       "name": "V5.9开发实施",
       "status": "pending",
-      "progress": "待技术评审完成后启动",
+      "progress": "待UI设计完成后启动，预计开发周期4月6日-5月3日",
       "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-01 22:14"
+      "updated_at": "2026-04-01 22:26"
     }
   ],
   "next_actions": [
-    "恢复architect会话以进行V5.9 PRD技术评审",
-    "UI设计师基于V5.9 PRD进行界面设计",
-    "QA准备V5.9测试计划和测试用例"
+    "恢复ui-designer会话以启动V5.9 UI设计工作",
+    "QA准备V5.9测试计划和测试用例",
+    "确认V5.8代码合并到发布分支（ops报告显示未发现V5.8分支）"
   ],
-  "last_updated": "2026-04-01T22:25:25.168964"
+  "last_updated": "2026-04-01T22:27:58.800456"
 }

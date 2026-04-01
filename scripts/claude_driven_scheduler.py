@@ -191,11 +191,42 @@ class ClaudeDrivenScheduler:
                 with open(PLAN_FILE, 'r', encoding='utf-8') as f:
                     plan = json.load(f)
                     if plan:
+                        # 检查是否需要归档（版本已闭环）
+                        if plan.get("overall_status") == "completed":
+                            logger.info(f"📋 版本 {plan.get('current_version')} 已闭环，计划将归档")
+                            self._archive_plan(plan)
+                            return {}
                         logger.info(f"📋 调度计划加载成功: {plan.get('current_version', '未知版本')}")
                         return plan
         except Exception as e:
             logger.warning(f"加载调度计划失败: {e}")
         return {}
+
+    def _archive_plan(self, plan: Dict):
+        """归档已完成的计划"""
+        try:
+            archive_file = PLAN_FILE.parent / "plan_archive.json"
+            archive = []
+            if archive_file.exists():
+                with open(archive_file, 'r', encoding='utf-8') as f:
+                    archive = json.load(f)
+            # 添加归档记录
+            archive.append({
+                "version": plan.get("current_version"),
+                "completed_at": datetime.now().isoformat(),
+                "milestones": plan.get("milestones", [])
+            })
+            # 只保留最近5个版本的归档
+            if len(archive) > 5:
+                archive = archive[-5:]
+            with open(archive_file, 'w', encoding='utf-8') as f:
+                json.dump(archive, f, ensure_ascii=False, indent=2)
+            logger.info(f"📋 已归档版本 {plan.get('current_version')} 的计划")
+            # 清空当前计划文件
+            with open(PLAN_FILE, 'w', encoding='utf-8') as f:
+                json.dump({}, f)
+        except Exception as e:
+            logger.error(f"归档计划失败: {e}")
 
     def _save_scheduling_plan(self):
         """保存调度计划"""
