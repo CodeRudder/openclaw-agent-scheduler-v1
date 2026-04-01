@@ -490,7 +490,10 @@ class ClaudeDrivenScheduler:
 
     def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
                            all_session_status: Dict[str, Dict],
-                           notification_history: Dict) -> List[SchedulingDecision]:
+                           notification_history: Dict) -> tuple:
+        """综合所有群消息，一次AI调用做出全局决策。
+        返回: (decisions: List[SchedulingDecision], analysis: Dict)
+        """
         """综合所有群消息，一次AI调用做出全局决策"""
 
         # 构建所有群的消息摘要
@@ -540,8 +543,9 @@ class ClaudeDrivenScheduler:
 {history_str}
 
 请综合分析以上所有群的消息，梳理项目整体进度和卡点问题，做出跨群调度决策。
-如果没有需要跨群协调的事项，返回空数组 []。
-注意：raw_messages字段不需要填写，系统会自动从API获取。"""
+如果没有需要跨群协调的事项，decisions返回空数组 []。
+注意：raw_messages字段不需要填写，系统会自动从API获取。
+必须输出analysis部分，包含项目进度、各群当前任务、卡点问题。"""
 
         try:
             resp = requests.post(
@@ -564,45 +568,42 @@ class ClaudeDrivenScheduler:
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             logger.debug(f"AI返回内容: {content[:300]}")
 
-            # 解析JSON - 可能是数组或单个对象
+            # 解析JSON - 新格式: {analysis: {...}, decisions: [...]}
             import re
 
-            # 尝试匹配JSON数组
-            json_match = re.search(r'\[[\s\S]*\]', content)
-            if json_match:
-                try:
-                    decisions_list = json.loads(json_match.group())
-                    if not isinstance(decisions_list, list):
-                        decisions_list = [decisions_list]
-                except json.JSONDecodeError:
-                    logger.error(f"JSON数组解析失败")
-                    return []
-            else:
-                # 尝试匹配单个JSON对象
-                json_match = re.search(r'\{[\s\S]*\}', content)
-                if not json_match:
-                    json_match = re.search(r'\{[\s\S]*', content)
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if not json_match:
+                json_match = re.search(r'\{[\s\S]*', content)
 
-                if json_match:
-                    json_str = json_match.group()
-                    if not json_str.rstrip().endswith('}'):
-                        for i in range(len(json_str) - 1, -1, -1):
-                            if json_str[i] in ['"', ']']:
-                                json_str = json_str[:i+1] + '}'
-                                break
-                    try:
-                        decisions_list = [json.loads(json_str)]
-                    except json.JSONDecodeError:
-                        logger.error(f"JSON解析失败: {content[:300]}")
-                        return []
-                else:
-                    logger.info("  AI未返回有效JSON，无需通知")
-                    return []
+            if not json_match:
+                logger.info("  AI未返回有效JSON，无需通知")
+                return [], {}
+
+            json_str = json_match.group()
+            if not json_str.rstrip().endswith('}'):
+                for i in range(len(json_str) - 1, -1, -1):
+                    if json_str[i] in ['"', ']']:
+                        json_str = json_str[:i+1] + '}'
+                        break
+
+            try:
+                parsed = json.loads(json_str)
+            except json.JSONDecodeError:
+                logger.error(f"JSON解析失败: {content[:300]}")
+                return [], {}
+
+            # 提取分析报告
+            analysis = parsed.get("analysis", {})
+
+            # 提取决策列表
+            decisions_data = parsed.get("decisions", [])
+            if not isinstance(decisions_data, list):
+                decisions_data = [decisions_data] if decisions_data else []
 
             # 转换为SchedulingDecision列表
             results = []
-            for d in decisions_list:
-                if d.get("action") == "ignore" or d.get("action") == "wait":
+            for d in decisions_data:
+                if d.get("action") in ("ignore", "wait"):
                     continue
                 results.append(SchedulingDecision(
                     action=d.get("action", "notify"),
@@ -617,11 +618,11 @@ class ClaudeDrivenScheduler:
                     qa_raw_messages="",
                     bug_doc_complete=d.get("bug_doc_complete", True)
                 ))
-            return results
+            return results, analysis
 
         except Exception as e:
             logger.error(f"综合分析失败: {e}")
-            return []
+            return [], {}
 
     def review_raw_message_with_ai(self, raw_content: str, decision: SchedulingDecision) -> str:
         """让AI审核并处理转发的原始消息，确保内容准确无歧义"""
@@ -981,9 +982,48 @@ data/bugs/TC-XXX_description.md
 
         # ========== 第二步：综合分析，一次AI调用 ==========
         logger.info(f"\n🧠 综合分析所有群消息...")
-        decisions = self.analyze_with_claude(
+        decisions, analysis = self.analyze_with_claude(
             all_group_messages, all_session_status, self.notification_history
         )
+
+        # 输出分析报告
+        if analysis:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"📊 跨群分析报告")
+            logger.info(f"{'='*60}")
+            if analysis.get("current_version"):
+                logger.info(f"  当前版本: {analysis['current_version']}")
+            if analysis.get("overall_progress"):
+                logger.info(f"  整体进度: {analysis['overall_progress']}")
+
+            # 输出各群Agent任务状态
+            tasks = analysis.get("tasks", [])
+            if tasks:
+                logger.info(f"\n  📋 当前任务 (工作群-Agent-任务):")
+                for t in tasks:
+                    group = t.get("group", "?")
+                    agent = t.get("agent", "?")
+                    task = t.get("task", "?")
+                    status = t.get("status", "?")
+                    status_icon = {"处理中": "🔄", "已完成": "✅", "等待中": "⏳", "超时": "⚠️"}.get(status, "•")
+                    logger.info(f"    {status_icon} {group} - {agent}: {task} [{status}]")
+
+            # 输出卡点问题
+            blockers = analysis.get("blockers", [])
+            if blockers:
+                logger.info(f"\n  🚧 卡点问题:")
+                for b in blockers:
+                    logger.info(f"    - {b}")
+
+            # 输出版本状态
+            vs = analysis.get("version_status", {})
+            if vs:
+                logger.info(f"\n  📦 版本状态:")
+                for key, val in vs.items():
+                    icon = "✅" if val else "❌"
+                    logger.info(f"    {icon} {key}: {val}")
+
+            logger.info(f"{'='*60}")
 
         if not decisions:
             logger.info("  ✅ 无需跨群通知")

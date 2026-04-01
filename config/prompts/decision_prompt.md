@@ -66,32 +66,58 @@
 - Agent超时但非关键路径 → 不通知
 
 ## 输出格式
-返回JSON数组，包含0-N个决策（没有需要通知的返回空数组）：
+返回JSON对象，包含分析报告和决策列表：
 ```json
-[
-  {
-    "action": "notify",
-    "target_group": "群组ID",
-    "target_group_name": "群组名称",
-    "mention_users": ["目标群成员"],
-    "message_content": "通知内容（简短明了，不超过200字）",
-    "reasoning": "决策理由",
-    "extracted_issues": ["TC-XXX: 简短摘要"],
-    "bug_doc_complete": true,
-    "source_group": "来源群组ID"
-  }
-]
+{
+  "analysis": {
+    "current_version": "当前处理的版本号",
+    "overall_progress": "整体进度一句话描述",
+    "blockers": ["卡点问题1", "卡点问题2"],
+    "tasks": [
+      {
+        "group": "群组名称",
+        "agent": "agent名称",
+        "task": "正在处理的任务描述",
+        "status": "处理中/已完成/等待中/超时",
+        "duration": "已持续时间"
+      }
+    ],
+    "version_status": {
+      "dev_complete": true,
+      "qa_passed": false,
+      "product_confirmed": false,
+      "env_stable": true,
+      "can_close": false
+    }
+  },
+  "decisions": [
+    {
+      "action": "notify",
+      "target_group": "群组ID",
+      "target_group_name": "群组名称",
+      "mention_users": ["目标群成员"],
+      "message_content": "通知内容（简短明了，不超过200字）",
+      "reasoning": "决策理由",
+      "extracted_issues": ["TC-XXX: 简短摘要"],
+      "bug_doc_complete": true,
+      "source_group": "来源群组ID"
+    }
+  ]
+}
 ```
 
-如果所有群都不需要通知，返回：
+如果所有群都不需要通知，decisions返回空数组：
 ```json
-[]
+{
+  "analysis": { ... },
+  "decisions": []
+}
 ```
 
 **字段要求**:
+- `analysis.tasks`: 列出每个群中每个agent正在做的真实任务，根据消息内容判断
+- `analysis.version_status`: 严格根据闭环标准判断各维度状态
+- `decisions`: 每个决策必须是真正需要跨群协调的事项
 - `message_content`: 简洁有指导性，不超过200字
 - `bug_doc_complete`: 仅当问题未解决且文档不完整时为false
-- `extracted_issues`: 只提取当前仍未解决的问题
-- `source_group`: 消息来源群组ID
 - 不要返回raw_messages或qa_raw_messages字段
-- 每个决策必须是真正需要跨群协调的事项
