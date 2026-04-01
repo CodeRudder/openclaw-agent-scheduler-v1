@@ -920,7 +920,7 @@ class ClaudeDrivenScheduler:
 
             if not json_match:
                 logger.info("  AI未返回有效JSON，无需通知")
-                return [], {}
+                return [], {}, {}
 
             json_str = json_match.group()
             if not json_str.rstrip().endswith('}'):
@@ -933,7 +933,7 @@ class ClaudeDrivenScheduler:
                 parsed = json.loads(json_str)
             except json.JSONDecodeError:
                 logger.error(f"JSON解析失败: {content[:300]}")
-                return [], {}
+                return [], {}, {}
 
             # 提取分析报告
             analysis = parsed.get("analysis", {})
