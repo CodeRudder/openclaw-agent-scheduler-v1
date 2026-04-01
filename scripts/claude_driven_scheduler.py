@@ -536,18 +536,27 @@ class ClaudeDrivenScheduler:
         """获取激活尝试次数"""
         attempts = self.notification_history.get("activation_attempts", {})
         key = f"{group_id}:{agent_name}"
-        return attempts.get(key, 0)
+        return attempts.get(key, {}).get("count", 0) if isinstance(attempts.get(key), dict) else attempts.get(key, 0)
 
-    def increment_activation_attempt(self, group_id: str, agent_name: str) -> int:
-        """增加激活尝试次数，返回新的次数"""
+    def get_activation_last_activity(self, group_id: str, agent_name: str) -> Optional[str]:
+        """获取上次激活时记录的会话活动时间"""
+        attempts = self.notification_history.get("activation_attempts", {})
+        key = f"{group_id}:{agent_name}"
+        entry = attempts.get(key, {})
+        if isinstance(entry, dict):
+            return entry.get("last_activity")
+        return None
+
+    def set_activation_attempt(self, group_id: str, agent_name: str, count: int, last_activity: str):
+        """设置激活尝试次数和上次会话活动时间"""
         if "activation_attempts" not in self.notification_history:
             self.notification_history["activation_attempts"] = {}
         key = f"{group_id}:{agent_name}"
-        current = self.notification_history["activation_attempts"].get(key, 0)
-        new_count = current + 1
-        self.notification_history["activation_attempts"][key] = new_count
+        self.notification_history["activation_attempts"][key] = {
+            "count": count,
+            "last_activity": last_activity
+        }
         self._save_notification_history()
-        return new_count
 
     def clear_activation_attempt(self, group_id: str, agent_name: str):
         """清除激活尝试次数（会话恢复活动后调用）"""
@@ -617,12 +626,26 @@ class ClaudeDrivenScheduler:
             logger.info(f"     会话活动: {int(time_diff)}分钟前 {'⚠️ 超时' if is_session_timeout else '✅ 活跃'}")
 
             if not is_session_timeout:
-                # 步骤3：会话未超时，不激活（agent可能只是在处理中）
-                logger.info(f"     → 会话活跃，不激活")
+                # 步骤3：会话未超时，检查是否激活生效了
+                last_activity_str = last_activity.isoformat() if last_activity else None
+                saved_activity = self.get_activation_last_activity(group_id, agent_name)
+                if saved_activity and last_activity_str and last_activity_str != saved_activity:
+                    # 会话活动时间变了 → 激活生效，重置计数
+                    logger.info(f"     ✅ 会话已恢复活动（活动时间已更新），重置激活计数")
+                    self.clear_activation_attempt(group_id, agent_name)
+                else:
+                    logger.info(f"     → 会话活跃，不激活")
                 continue
 
-            # ===== 步骤3：会话确实超时，执行激活或重置 =====
+            # ===== 步骤3：会话确实超时，检查激活是否生效 =====
             attempts = self.get_activation_attempts(group_id, agent_name)
+            current_activity_str = last_activity.isoformat() if last_activity else None
+            saved_activity = self.get_activation_last_activity(group_id, agent_name)
+
+            # 如果有激活记录且会话活动时间已变化 → 激活生效，重置计数重新开始
+            if attempts > 0 and saved_activity and current_activity_str and current_activity_str != saved_activity:
+                logger.info(f"     ✅ 激活生效（会话活动已更新），重置激活计数")
+                attempts = 0
 
             if attempts >= 2:
                 logger.info(f"     🔄 已激活{attempts}次仍无响应，重置会话")
@@ -632,7 +655,9 @@ class ClaudeDrivenScheduler:
             else:
                 logger.info(f"     📢 发送激活消息 (第{attempts+1}次)")
                 if self.send_activation_message(group_id, agent_name):
-                    self.increment_activation_attempt(group_id, agent_name)
+                    # 记录激活次数和当前会话活动时间（下次检查时对比是否变化）
+                    current_activity = last_activity.isoformat() if last_activity else ""
+                    self.set_activation_attempt(group_id, agent_name, attempts + 1, current_activity)
 
             handled += 1
 
