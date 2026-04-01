@@ -73,12 +73,13 @@
     "current_version": "当前处理的版本号",
     "overall_progress": "整体进度一句话描述",
     "blockers": ["卡点问题1", "卡点问题2"],
-    "blocking_agents": [
+    "blocking_tasks": [
       {
         "group_id": "群组ID",
+        "group_name": "群组名称",
         "agent": "agent名称",
-        "reason": "阻塞原因：该agent超时导致XX任务无法继续",
-        "task": "正在处理的任务"
+        "task": "被阻塞的任务描述",
+        "reason": "阻塞原因：为什么这个任务卡住了"
       }
     ],
     "tasks": [
@@ -86,8 +87,7 @@
         "group": "群组名称",
         "agent": "agent名称",
         "task": "正在处理的任务描述",
-        "status": "处理中/已完成/等待中/超时",
-        "is_blocking": true
+        "status": "处理中/已完成/等待中/超时"
       }
     ],
     "version_status": {
@@ -123,9 +123,9 @@
 ```
 
 **字段要求**:
-- `analysis.blocking_agents`: **关键字段** - 列出真正阻塞任务进度的agent（只有这些agent需要激活/重置）
-  - 判断标准：该agent超时且其任务阻塞了整体流程（如开发超时导致验收无法进行）
-  - 不阻塞的agent不要列出（如顾问超时、已完成任务的agent超时）
+- `analysis.blocking_tasks`: **关键字段** - 列出任务进度被阻塞的工作群+agent+任务
+  - 只列出任务流被卡住的agent（开发未完成导致验收无法开始、环境问题导致测试无法进行等）
+  - 不要列出：已完成的任务、非关键路径的等待、内部讨论中的agent
 - `analysis.tasks`: 列出每个群中每个agent正在做的真实任务
 - `analysis.version_status`: 严格根据闭环标准判断各维度状态
 - `decisions`: 每个决策必须是真正需要跨群协调的事项
