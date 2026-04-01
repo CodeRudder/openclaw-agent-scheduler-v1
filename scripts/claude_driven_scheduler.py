@@ -638,7 +638,7 @@ class ClaudeDrivenScheduler:
             logger.warning(f"找不到群 {group_id} 的channel_id")
             return False
 
-        message = f"@{agent_name} 请继续处理当前任务，会话已超时。请分步完成，上下文会自动压缩，无需担心token限制。专注当前步骤完成即可。"
+        message = f"@{agent_name} 请继续处理当前任务，会话已超时。当前上下文使用率低于90%，可以放心执行任务。请分步完成，上下文会自动压缩，无需担心token限制。专注当前步骤完成即可。"
 
         try:
             resp = requests.post(
@@ -664,7 +664,7 @@ class ClaudeDrivenScheduler:
             logger.warning(f"找不到群 {group_id} 的channel_id")
             return False
 
-        message = f"@{agent_name} 请确认任务进度：{task_desc[:50]}...\n如已完成请回复确认结果，如未完成请分步继续处理。上下文会自动压缩，无需担心token限制，专注当前步骤完成即可。"
+        message = f"@{agent_name} 请确认任务进度：{task_desc[:50]}...\n如已完成请回复确认结果，如未完成请分步继续处理。当前上下文使用率低于90%，可以放心执行任务。上下文会自动压缩，无需担心token限制，专注当前步骤完成即可。"
 
         try:
             resp = requests.post(
@@ -681,6 +681,81 @@ class ClaudeDrivenScheduler:
             return True
         except Exception as e:
             logger.error(f"发送任务询问失败: {e}")
+            return False
+
+    def send_compact_command(self, group_id: str, agent_name: str) -> bool:
+        """发送/compact命令压缩agent上下文"""
+        channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
+        if not channel_id:
+            logger.warning(f"找不到群 {group_id} 的channel_id")
+            return False
+
+        message = f"@{agent_name} /compact"
+
+        try:
+            resp = requests.post(
+                f"{MM_URL}/api/v4/posts",
+                headers=self.headers,
+                json={
+                    "channel_id": channel_id,
+                    "message": message
+                },
+                timeout=10
+            )
+            resp.raise_for_status()
+            logger.info(f"  🗜️ 已发送/compact压缩命令到 {GROUPS.get(group_id, {}).get('name', group_id)} @{agent_name}")
+            return True
+        except Exception as e:
+            logger.error(f"发送compact命令失败: {e}")
+            return False
+
+    def check_token_anxiety(self, group_id: str, agent_name: str, last_assistant_msgs: list) -> bool:
+        """检查agent是否出现token焦虑，频繁提及时则触发/compact压缩
+
+        Returns: True表示已触发压缩
+        """
+        TOKEN_ANXIETY_KEYWORDS = [
+            "token限制", "token limit", "token_limit",
+            "上下文限制", "context limit", "context_length",
+            "上下文不足", "上下文长度", "context length",
+            "超出限制", "exceeds limit", "token不足",
+            "由于token", "due to token", "无法完成",
+            "out of tokens", "超出上下文", "context window",
+            "剩余token", "remaining token", "接近上限",
+            "approaching limit", "内容过长", "内容太长"
+        ]
+        TOKEN_ANXIETY_THRESHOLD = 2  # 连续出现2次即触发压缩
+
+        # 检查最后几条assistant消息是否包含token焦虑关键词
+        anxiety_count = 0
+        for msg in last_assistant_msgs:
+            content = msg.get("content", "")
+            if any(kw in content.lower() for kw in [k.lower() for k in TOKEN_ANXIETY_KEYWORDS]):
+                anxiety_count += 1
+
+        if anxiety_count == 0:
+            return False
+
+        # 跟踪连续出现次数
+        key = f"token_anxiety:{group_id}:{agent_name}"
+        attempts = self.notification_history.setdefault("token_anxiety_counts", {})
+        count = attempts.get(key, 0) + anxiety_count
+        attempts[key] = count
+        self._save_notification_history()
+
+        group_name = GROUPS.get(group_id, {}).get("name", group_id)
+
+        if count >= TOKEN_ANXIETY_THRESHOLD:
+            logger.info(f"\n  🗜️ Token焦虑触发压缩: {group_name}-{agent_name}")
+            logger.info(f"     检测到{anxiety_count}条消息含token焦虑关键词，累计{count}次")
+            logger.info(f"     → 发送/compact压缩上下文")
+            self.send_compact_command(group_id, agent_name)
+            # 重置计数
+            attempts[key] = 0
+            self._save_notification_history()
+            return True
+        else:
+            logger.info(f"  ⚠️ Token焦虑迹象: {group_name}-{agent_name} ({count}/{TOKEN_ANXIETY_THRESHOLD})")
             return False
 
     def reset_agent_session(self, session_file: str, agent_name: str) -> bool:
@@ -904,6 +979,13 @@ class ClaudeDrivenScheduler:
 
             if not agent_status:
                 continue
+
+            # 检查token焦虑：从最后assistant消息中检测
+            last_assistant_msgs = agent_status.get("last_assistant_messages", [])
+            if last_assistant_msgs:
+                if self.check_token_anxiety(group_id, agent_name, last_assistant_msgs):
+                    handled += 1
+                    continue
 
             stop_reason = agent_status.get("stop_reason")
 
