@@ -438,6 +438,28 @@ class ClaudeDrivenScheduler:
             logger.debug(f"解析jsonl文件失败 {jsonl_file}: {e}")
             return None
 
+    def get_last_assistant_stop_reason(self, jsonl_file: Path) -> Optional[str]:
+        """获取最后一条assistant消息的stopReason（检测异常终止）"""
+        try:
+            last_stop_reason = None
+            with open(jsonl_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+                        if msg.get("type") == "message":
+                            message = msg.get("message", {})
+                            if message.get("role") == "assistant":
+                                last_stop_reason = message.get("stopReason")
+                    except json.JSONDecodeError:
+                        continue
+            return last_stop_reason
+        except Exception as e:
+            logger.debug(f"解析jsonl stopReason失败 {jsonl_file}: {e}")
+            return None
+
     def check_agent_session_status(self, group_id: str) -> Dict:
         """检查群的agent会话是否超时（基于最后一条assistant消息时间）"""
         agents = GROUPS.get(group_id, {}).get("agents", [])
@@ -598,7 +620,7 @@ class ClaudeDrivenScheduler:
             if not agent_name:
                 continue
 
-            # ===== 步骤2：检查该agent的会话活动是否超时 =====
+            # ===== 步骤2：检查该agent的会话状态 =====
             agent_session_dir = agents_base / agent_name / "sessions"
             if not agent_session_dir.exists():
                 logger.info(f"  ⚠️ {group_name}-{agent_name}: 阻塞但无会话文件，跳过")
@@ -611,6 +633,18 @@ class ClaudeDrivenScheduler:
                 continue
 
             latest_file = max(session_files, key=lambda x: x.stat().st_mtime)
+
+            # ===== 步骤2a：检查会话是否异常终止（stopReason=aborted/error） =====
+            stop_reason = self.get_last_assistant_stop_reason(latest_file)
+            if stop_reason in ("aborted", "error"):
+                logger.info(f"\n  🚨 异常终止: {group_name}-{agent_name}: {task_desc}")
+                logger.info(f"     stopReason={stop_reason} → 立即通知继续处理")
+                self.send_activation_message(group_id, agent_name)
+                self.clear_activation_attempt(group_id, agent_name)
+                handled += 1
+                continue
+
+            # ===== 步骤2b：检查会话活动是否超时 =====
             last_activity = self.get_last_assistant_message_time(latest_file)
 
             if last_activity:
