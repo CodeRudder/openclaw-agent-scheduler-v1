@@ -183,28 +183,13 @@ class ClaudeDrivenScheduler:
             logger.error(f"保存通知历史失败: {e}")
 
     def get_group_messages(self, channel_id: str, limit: int = MESSAGES_PER_GROUP) -> List[GroupMessage]:
-        """获取群消息 - 只提取群成员消息，每成员最后5条，忽略admin/bot消息"""
-        MAX_TOTAL_SIZE = 30 * 1024  # 30KB
+        """获取群消息 - 提取群成员和claw-admin消息，每成员最后10条"""
+        MAX_TOTAL_SIZE = 50 * 1024  # 50KB
         MAX_MESSAGE_LENGTH = 2000   # 单条消息最大长度
-        MESSAGES_PER_MEMBER = 5     # 每个成员最多取5条
+        MESSAGES_PER_MEMBER = 10    # 每个成员最多取10条
 
-        # 获取admin用户名
-        admin_usernames = {"claw-admin", "claw-scheduler", "admin", "bot"}
-        admin_user_ids = set()
-
-        try:
-            resp = requests.get(
-                f"{MM_URL}/api/v4/users",
-                headers=self.headers,
-                params={"page": 0, "per_page": 200},
-                timeout=10
-            )
-            if resp.status_code == 200:
-                for user in resp.json():
-                    if user.get("username", "").lower() in admin_usernames:
-                        admin_user_ids.add(user.get("id"))
-        except:
-            pass
+        # 允许的用户名（群成员 + claw-admin）
+        allowed_usernames = {"claw-admin"}  # claw-admin也允许
 
         # 获取当前群的agent成员列表
         group_agents = set()
@@ -212,9 +197,10 @@ class ClaudeDrivenScheduler:
             if gcfg.get("channel_id") == channel_id:
                 group_agents = set(a.lstrip('@').lower() for a in gcfg.get("agents", []))
                 break
+        allowed_usernames.update(group_agents)
 
-        # 获取agent的user_id集合
-        agent_user_id_map = {}  # user_id -> agent_name
+        # 获取允许用户的user_id映射
+        user_id_map = {}  # user_id -> username
         try:
             resp = requests.get(
                 f"{MM_URL}/api/v4/users",
@@ -225,8 +211,8 @@ class ClaudeDrivenScheduler:
             if resp.status_code == 200:
                 for user in resp.json():
                     uname = user.get("username", "").lower()
-                    if uname in group_agents:
-                        agent_user_id_map[user.get("id")] = uname
+                    if uname in allowed_usernames:
+                        user_id_map[user.get("id")] = uname
         except:
             pass
 
@@ -234,7 +220,7 @@ class ClaudeDrivenScheduler:
             resp = requests.get(
                 f"{MM_URL}/api/v4/channels/{channel_id}/posts",
                 headers=self.headers,
-                params={"page": 0, "per_page": limit * 2},  # 多取一些再过滤
+                params={"page": 0, "per_page": limit * 2},
                 timeout=10
             )
             resp.raise_for_status()
@@ -250,12 +236,8 @@ class ClaudeDrivenScheduler:
                 user_id = post.get("user_id", "")
                 content = post.get("message", "")
 
-                # 忽略admin/bot消息
-                if user_id in admin_user_ids:
-                    continue
-
-                # 只保留群成员消息
-                if user_id not in agent_user_id_map:
+                # 只保留允许的用户消息（群成员 + claw-admin）
+                if user_id not in user_id_map:
                     continue
 
                 # 截断过长的消息
@@ -265,7 +247,7 @@ class ClaudeDrivenScheduler:
                 msg = GroupMessage(
                     group_id=channel_id,
                     group_name="",
-                    sender=agent_user_id_map[user_id],
+                    sender=user_id_map[user_id],
                     content=content,
                     timestamp=post.get("create_at", 0) / 1000
                 )
@@ -274,7 +256,7 @@ class ClaudeDrivenScheduler:
                     member_messages[user_id] = []
                 member_messages[user_id].append(msg)
 
-            # 每个成员只保留最后5条
+            # 每个成员只保留最后10条
             all_messages = []
             for uid, msgs in member_messages.items():
                 all_messages.extend(msgs[-MESSAGES_PER_MEMBER:])
@@ -506,29 +488,39 @@ class ClaudeDrivenScheduler:
 
         return result
 
-    def analyze_with_claude(self, messages: List[GroupMessage], context: str,
-                           target_groups_status: Dict, notification_history: Dict,
-                           session_status: Dict, source_group: str = "") -> Optional[SchedulingDecision]:
-        """使用Claude分析并决策"""
+    def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
+                           all_session_status: Dict[str, Dict],
+                           notification_history: Dict) -> List[SchedulingDecision]:
+        """综合所有群消息，一次AI调用做出全局决策"""
 
-        # 构建消息摘要
-        msg_summary = "\n".join([
-            f"- [{datetime.fromtimestamp(m.timestamp).strftime('%H:%M')}] {m.sender}: {m.content[:150]}"
-            for m in messages[-20:]
-        ])
-
-        # 构建目标群状态
-        target_status = ""
-        for group_id, msgs in target_groups_status.items():
+        # 构建所有群的消息摘要
+        groups_summary = ""
+        for group_id, messages in all_group_messages.items():
             group_name = GROUPS.get(group_id, {}).get("name", group_id)
-            target_status += f"\n### {group_name}:\n"
-            for m in msgs[-5:]:
-                target_status += f"- [{datetime.fromtimestamp(m.timestamp).strftime('%H:%M')}] {m.sender}: {m.content[:80]}\n"
+            if not messages:
+                groups_summary += f"\n### {group_name} ({group_id})\n（无消息）\n"
+                continue
+            groups_summary += f"\n### {group_name} ({group_id})\n"
+            for m in messages:
+                ts = datetime.fromtimestamp(m.timestamp).strftime('%H:%M')
+                groups_summary += f"- [{ts}] {m.sender}: {m.content[:200]}\n"
 
-        # 构建通知历史（包含详细内容供AI判断重复）
+        # 构建会话超时信息
+        session_info = ""
+        for group_id, status in all_session_status.items():
+            if status.get("is_timeout"):
+                group_name = GROUPS.get(group_id, {}).get("name", group_id)
+                timeout_agents = [a for a in status.get("agents", []) if a.get("is_timeout")]
+                if timeout_agents:
+                    session_info += f"\n**{group_name}**:\n"
+                    for agent in timeout_agents:
+                        role = "执行者" if agent["name"] in AGENT_ROLES.get("executors", []) else "顾问"
+                        session_info += f"  - {agent['name']} ({role}): {agent['minutes_ago']}分钟无响应\n"
+
+        # 构建通知历史
         history_str = ""
         if notification_history.get("history"):
-            history_str = "### 最近通知记录（请仔细检查是否有重复通知模式）:\n"
+            history_str = "### 最近通知记录:\n"
             for h in notification_history["history"][-10:]:
                 issues_str = ", ".join(h.get("extracted_issues", []))[:100]
                 history_str += (
@@ -539,29 +531,17 @@ class ClaudeDrivenScheduler:
                     f"内容={h.get('message_content', '')[:80]}\n"
                 )
 
-        # 构建会话超时信息
-        session_info = ""
-        if session_status["is_timeout"]:
-            session_info = "\n## ⚠️ Agent会话超时警告\n"
-            session_info += "以下agent会话已超时，可能需要重新通知:\n"
-            for agent in session_status["agents"]:
-                if agent["is_timeout"]:
-                    role = "执行者" if agent["name"] in AGENT_ROLES.get("executors", []) else "顾问"
-                    session_info += f"- {agent['name']} ({role}): {agent['minutes_ago']}分钟无响应\n"
+        user_prompt = f"""## 所有工作群最新消息
+{groups_summary}
 
-        user_prompt = f"""{context}
-
-{session_info}
-
-## 当前分析群组消息 (最近20条):
-{msg_summary}
-
-## 目标群最新状态:
-{target_status}
+## Agent会话超时状态
+{session_info if session_info else "无超时"}
 
 {history_str}
 
-请分析以上信息，做出调度决策。注意：raw_messages字段不需要填写，系统会自动从API获取。"""
+请综合分析以上所有群的消息，梳理项目整体进度和卡点问题，做出跨群调度决策。
+如果没有需要跨群协调的事项，返回空数组 []。
+注意：raw_messages字段不需要填写，系统会自动从API获取。"""
 
         try:
             resp = requests.post(
@@ -574,63 +554,74 @@ class ClaudeDrivenScheduler:
                         {"role": "user", "content": user_prompt}
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 2000
+                    "max_tokens": 3000
                 },
-                timeout=60
+                timeout=90
             )
             resp.raise_for_status()
             data = resp.json()
 
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            logger.debug(f"AI返回内容: {content[:200]}")
+            logger.debug(f"AI返回内容: {content[:300]}")
 
-            # 解析JSON - 处理截断的JSON
+            # 解析JSON - 可能是数组或单个对象
             import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if not json_match:
-                # 尝试修复截断的JSON
-                json_match = re.search(r'\{[\s\S]*', content)
 
+            # 尝试匹配JSON数组
+            json_match = re.search(r'\[[\s\S]*\]', content)
             if json_match:
-                json_str = json_match.group()
-                # 如果JSON不完整（没有闭合的}），尝试补全
-                if not json_str.rstrip().endswith('}'):
-                    # 找到最后一个完整的键值对
-                    # 尝试在最后一个逗号或冒号处截断并闭合
-                    for i in range(len(json_str) - 1, -1, -1):
-                        if json_str[i] in ['"', ']']:
-                            # 找到闭合位置
-                            brace_count = 0
-                            for j in range(i, -1, -1):
-                                if json_str[j] == '}': brace_count += 1
-                                if json_str[j] == '{': brace_count -= 1
-                            json_str = json_str[:i+1] + '}'
-                            break
-                    logger.warning(f"JSON被截断，尝试修复")
-
                 try:
-                    decision_data = json.loads(json_str)
+                    decisions_list = json.loads(json_match.group())
+                    if not isinstance(decisions_list, list):
+                        decisions_list = [decisions_list]
                 except json.JSONDecodeError:
-                    logger.error(f"JSON解析失败，原始内容: {json_str[:300]}")
-                    return None
+                    logger.error(f"JSON数组解析失败")
+                    return []
+            else:
+                # 尝试匹配单个JSON对象
+                json_match = re.search(r'\{[\s\S]*\}', content)
+                if not json_match:
+                    json_match = re.search(r'\{[\s\S]*', content)
 
-                return SchedulingDecision(
-                    action=decision_data.get("action", "wait"),
-                    target_group=decision_data.get("target_group", ""),
-                    target_group_name=decision_data.get("target_group_name", ""),
-                    mention_users=decision_data.get("mention_users", []),
-                    extracted_issues=decision_data.get("extracted_issues", []),
-                    message_content=decision_data.get("message_content", ""),
-                    reasoning=decision_data.get("reasoning", ""),
-                    source_group=source_group,
+                if json_match:
+                    json_str = json_match.group()
+                    if not json_str.rstrip().endswith('}'):
+                        for i in range(len(json_str) - 1, -1, -1):
+                            if json_str[i] in ['"', ']']:
+                                json_str = json_str[:i+1] + '}'
+                                break
+                    try:
+                        decisions_list = [json.loads(json_str)]
+                    except json.JSONDecodeError:
+                        logger.error(f"JSON解析失败: {content[:300]}")
+                        return []
+                else:
+                    logger.info("  AI未返回有效JSON，无需通知")
+                    return []
+
+            # 转换为SchedulingDecision列表
+            results = []
+            for d in decisions_list:
+                if d.get("action") == "ignore" or d.get("action") == "wait":
+                    continue
+                results.append(SchedulingDecision(
+                    action=d.get("action", "notify"),
+                    target_group=d.get("target_group", ""),
+                    target_group_name=d.get("target_group_name", ""),
+                    mention_users=d.get("mention_users", []),
+                    extracted_issues=d.get("extracted_issues", []),
+                    message_content=d.get("message_content", ""),
+                    reasoning=d.get("reasoning", ""),
+                    source_group=d.get("source_group", ""),
                     raw_messages="",
                     qa_raw_messages="",
-                    bug_doc_complete=decision_data.get("bug_doc_complete", True)
-                )
-        except Exception as e:
-            logger.error(f"Claude分析失败: {e}")
+                    bug_doc_complete=d.get("bug_doc_complete", True)
+                ))
+            return results
 
-        return None
+        except Exception as e:
+            logger.error(f"综合分析失败: {e}")
+            return []
 
     def review_raw_message_with_ai(self, raw_content: str, decision: SchedulingDecision) -> str:
         """让AI审核并处理转发的原始消息，确保内容准确无歧义"""
@@ -964,125 +955,107 @@ data/bugs/TC-XXX_description.md
             return False
 
     def run(self):
-        """执行调度"""
+        """执行调度 - 先收集所有群消息，再综合分析决策"""
         logger.info("=" * 70)
         logger.info(f"🕐 Claude驱动调度开始 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 70)
 
-        decisions_made = 0
-        notifications_sent = 0
-        notified_groups = set()
+        # ========== 第一步：收集所有群消息和会话状态 ==========
+        all_group_messages = {}   # group_id -> [GroupMessage]
+        all_session_status = {}   # group_id -> session_status
 
         for group_id, group_config in GROUPS.items():
             group_name = group_config["name"]
-            logger.info(f"\n🧠 分析 {group_name}...")
-
-            # 获取消息
             messages = self.get_group_messages(group_config["channel_id"])
-            if not messages:
-                logger.info(f"  跳过: 无消息")
-                continue
+            all_group_messages[group_id] = messages
 
-            logger.info(f"  消息数: {len(messages)}条")
-
-            # 检查会话状态
             session_status = self.check_agent_session_status(group_id)
-            if session_status["is_timeout"]:
-                timeout_agents = [a for a in session_status["agents"] if a["is_timeout"]]
-                logger.info(f"  ⚠️ 检测到 {len(timeout_agents)} 个agent会话超时")
+            all_session_status[group_id] = session_status
 
-            # 获取目标群状态（增加消息数量以获取完整验收报告）
-            target_groups = group_config.get("target_groups", [])
-            target_status = {}
-            for target_id in target_groups:
-                if target_id in GROUPS:
-                    # 验收群获取20条消息，其他群获取5条
-                    limit = 20 if "acceptance" in target_id or "qa" in target_id else 5
-                    target_status[target_id] = self.get_group_messages(
-                        GROUPS[target_id]["channel_id"], limit=limit
-                    )
+            timeout_agents = [a for a in session_status.get("agents", []) if a.get("is_timeout")]
+            logger.info(f"  {group_name}: {len(messages)}条消息"
+                        + (f", ⚠️ {len(timeout_agents)}个超时" if timeout_agents else ""))
 
-            # 构建上下文
-            context = f"当前分析群组: {group_name} ({group_id})"
+        total_msgs = sum(len(m) for m in all_group_messages.values())
+        logger.info(f"\n📊 消息收集完成: {total_msgs}条消息, {len(GROUPS)}个群")
 
-            # Claude分析
-            decision = self.analyze_with_claude(
-                messages, context, target_status,
-                self.notification_history, session_status, group_id
-            )
+        # ========== 第二步：综合分析，一次AI调用 ==========
+        logger.info(f"\n🧠 综合分析所有群消息...")
+        decisions = self.analyze_with_claude(
+            all_group_messages, all_session_status, self.notification_history
+        )
 
-            if not decision:
-                logger.info(f"  ⏭ 跳过: 无有效决策")
-                continue
+        if not decisions:
+            logger.info("  ✅ 无需跨群通知")
+            logger.info(f"\n🏁 调度结束 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            return
 
-            logger.info(f"\n📋 Claude决策:")
-            logger.info(f"  动作: {decision.action}")
+        # ========== 第三步：执行通知 ==========
+        notifications_sent = 0
+        notified_groups = set()
+
+        for decision in decisions:
+            logger.info(f"\n📋 调度决策:")
             logger.info(f"  目标: {decision.target_group_name}")
             logger.info(f"  @对象: {', '.join(decision.mention_users)}")
-            logger.info(f"  提炼问题: {decision.extracted_issues}")
-            logger.info(f"  理由: {decision.reasoning[:100]}...")
+            logger.info(f"  问题: {decision.extracted_issues}")
+            logger.info(f"  理由: {decision.reasoning[:150]}...")
 
-            decisions_made += 1
+            if decision.target_group in notified_groups:
+                logger.info(f"  ⏭ 跳过 {decision.target_group_name} - 已在本轮通知过")
+                continue
 
-            if decision.action == "notify" and decision.target_group:
-                if decision.target_group in notified_groups:
-                    logger.info(f"  ⏭ 跳过 {decision.target_group_name} - 已在本轮通知过")
-                    continue
-
-                # 🔑 关键：获取来源群的原始消息内容
-                # 1. 首先尝试获取mention_agent的最后一条消息（检查发送人user_id）
-                # 2. 如果agent没有发送过消息，则获取来源群所有最近消息
-                source_channel_id = GROUPS.get(decision.source_group, {}).get("channel_id", "")
-                if source_channel_id:
-                    raw_msg = ""
-                    if decision.mention_users:
-                        first_agent = decision.mention_users[0].lstrip('@')
-                        raw_msg = self.get_agent_last_raw_message(source_channel_id, first_agent)
-                        if raw_msg:
-                            logger.info(f"  📥 获取 {first_agent} 的原始消息 ({len(raw_msg)}字符)")
-
-                    if not raw_msg:
-                        raw_msg = self.get_source_group_raw_messages(source_channel_id, limit=5)
-                        if raw_msg:
-                            logger.info(f"  📥 获取来源群最近消息 ({len(raw_msg)}字符)")
-
+            # 获取来源群原始消息
+            source_channel_id = GROUPS.get(decision.source_group, {}).get("channel_id", "")
+            if source_channel_id:
+                raw_msg = ""
+                if decision.mention_users:
+                    first_agent = decision.mention_users[0].lstrip('@')
+                    raw_msg = self.get_agent_last_raw_message(source_channel_id, first_agent)
                     if raw_msg:
-                        decision.agent_raw_message = raw_msg
+                        logger.info(f"  📥 获取 {first_agent} 的原始消息 ({len(raw_msg)}字符)")
 
-                # 🔍 AI审核转发消息，确保内容准确无歧义
-                raw_for_review = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
-                if raw_for_review:
-                    reviewed = self.review_raw_message_with_ai(raw_for_review, decision)
-                    decision.agent_raw_message = reviewed
+                if not raw_msg:
+                    raw_msg = self.get_source_group_raw_messages(source_channel_id, limit=5)
+                    if raw_msg:
+                        logger.info(f"  📥 获取来源群最近消息 ({len(raw_msg)}字符)")
 
-                # 发送通知
-                if self.send_mattermost_notification(decision):
-                    self.send_feishu_notification(decision)
-                    notifications_sent += 1
-                    notified_groups.add(decision.target_group)
+                if raw_msg:
+                    decision.agent_raw_message = raw_msg
 
-                    # 记录历史（只保留最后20条，包含更多上下文供AI判断重复）
-                    history = self.notification_history.setdefault("history", [])
-                    history.append({
-                        "timestamp": datetime.now().isoformat(),
-                        "source_group": group_id,
-                        "target_group": decision.target_group,
-                        "target_group_name": decision.target_group_name,
-                        "mention_users": decision.mention_users,
-                        "extracted_issues": decision.extracted_issues[:5],
-                        "message_content": decision.message_content[:200],
-                        "reason": decision.reasoning[:100]
-                    })
-                    # 只保留最后20条
-                    if len(history) > 20:
-                        self.notification_history["history"] = history[-20:]
-                    self._save_notification_history()
-                    logger.info(f"📝 已记录通知历史 → {group_id}")
+            # AI审核转发消息
+            raw_for_review = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
+            if raw_for_review:
+                reviewed = self.review_raw_message_with_ai(raw_for_review, decision)
+                decision.agent_raw_message = reviewed
+
+            # 发送通知
+            if self.send_mattermost_notification(decision):
+                self.send_feishu_notification(decision)
+                notifications_sent += 1
+                notified_groups.add(decision.target_group)
+
+                # 记录历史
+                history = self.notification_history.setdefault("history", [])
+                history.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "source_group": decision.source_group,
+                    "target_group": decision.target_group,
+                    "target_group_name": decision.target_group_name,
+                    "mention_users": decision.mention_users,
+                    "extracted_issues": decision.extracted_issues[:5],
+                    "message_content": decision.message_content[:200],
+                    "reason": decision.reasoning[:100]
+                })
+                if len(history) > 20:
+                    self.notification_history["history"] = history[-20:]
+                self._save_notification_history()
+                logger.info(f"  📝 已记录通知历史")
 
         logger.info(f"\n{'=' * 70}")
         logger.info(f"📊 调度总结:")
-        logger.info(f"  分析群组: {len(GROUPS)}个")
-        logger.info(f"  生成决策: {decisions_made}个")
+        logger.info(f"  收集消息: {total_msgs}条 ({len(GROUPS)}个群)")
+        logger.info(f"  调度决策: {len(decisions)}个")
         logger.info(f"  发送通知: {notifications_sent}个")
         logger.info("=" * 70)
         logger.info(f"🏁 调度结束 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
