@@ -638,7 +638,7 @@ class ClaudeDrivenScheduler:
             logger.warning(f"找不到群 {group_id} 的channel_id")
             return False
 
-        message = f"@{agent_name} 请继续处理当前任务，会话已超时。不用考虑上下文长度限制，专注于当前步骤即可，完成后直接回复结果。"
+        message = f"@{agent_name} 请继续处理当前任务，会话已超时。请分步完成，上下文会自动压缩，无需担心token限制。专注当前步骤完成即可。"
 
         try:
             resp = requests.post(
@@ -664,7 +664,7 @@ class ClaudeDrivenScheduler:
             logger.warning(f"找不到群 {group_id} 的channel_id")
             return False
 
-        message = f"@{agent_name} 请确认任务进度：{task_desc[:50]}...\n如已完成请回复确认结果，如未完成请继续处理下一步。不用考虑上下文长度，专注当前步骤即可。"
+        message = f"@{agent_name} 请确认任务进度：{task_desc[:50]}...\n如已完成请回复确认结果，如未完成请分步继续处理。上下文会自动压缩，无需担心token限制，专注当前步骤完成即可。"
 
         try:
             resp = requests.post(
