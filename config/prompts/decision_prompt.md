@@ -73,13 +73,21 @@
     "current_version": "当前处理的版本号",
     "overall_progress": "整体进度一句话描述",
     "blockers": ["卡点问题1", "卡点问题2"],
+    "blocking_agents": [
+      {
+        "group_id": "群组ID",
+        "agent": "agent名称",
+        "reason": "阻塞原因：该agent超时导致XX任务无法继续",
+        "task": "正在处理的任务"
+      }
+    ],
     "tasks": [
       {
         "group": "群组名称",
         "agent": "agent名称",
         "task": "正在处理的任务描述",
         "status": "处理中/已完成/等待中/超时",
-        "duration": "已持续时间"
+        "is_blocking": true
       }
     ],
     "version_status": {
@@ -115,9 +123,10 @@
 ```
 
 **字段要求**:
-- `analysis.tasks`: 列出每个群中每个agent正在做的真实任务，根据消息内容判断
+- `analysis.blocking_agents`: **关键字段** - 列出真正阻塞任务进度的agent（只有这些agent需要激活/重置）
+  - 判断标准：该agent超时且其任务阻塞了整体流程（如开发超时导致验收无法进行）
+  - 不阻塞的agent不要列出（如顾问超时、已完成任务的agent超时）
+- `analysis.tasks`: 列出每个群中每个agent正在做的真实任务
 - `analysis.version_status`: 严格根据闭环标准判断各维度状态
 - `decisions`: 每个决策必须是真正需要跨群协调的事项
-- `message_content`: 简洁有指导性，不超过200字
-- `bug_doc_complete`: 仅当问题未解决且文档不完整时为false
 - 不要返回raw_messages或qa_raw_messages字段

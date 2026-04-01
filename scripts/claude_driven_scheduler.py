@@ -558,8 +558,28 @@ class ClaudeDrivenScheduler:
             del self.notification_history["activation_attempts"][key]
             self._save_notification_history()
 
-    def handle_timeout_agents(self, all_session_status: Dict):
-        """处理超时的agent会话：激活或重置"""
+    def handle_timeout_agents(self, all_session_status: Dict, blocking_agents: List[Dict]):
+        """处理阻塞任务进度的超时agent：激活或重置
+        只有AI分析确认为阻塞进度的agent才处理，不盲目激活所有超时agent
+        """
+        if not blocking_agents:
+            logger.info("  ✅ 无阻塞进度的超时agent")
+            return
+
+        # 构建 blocking_agents 索引: (group_id, agent_name) -> blocking_info
+        blocking_map = {}
+        for ba in blocking_agents:
+            gid = ba.get("group_id", "")
+            # 兼容：AI可能返回group_name需要转换
+            if not gid:
+                for gid_key, gcfg in GROUPS.items():
+                    if gcfg.get("name") == ba.get("group", ""):
+                        gid = gid_key
+                        break
+            blocking_map[(gid, ba.get("agent", ""))] = ba
+
+        # 遍历所有超时agent，只处理在blocking_map中的
+        handled = 0
         for group_id, status in all_session_status.items():
             if not status.get("is_timeout"):
                 continue
@@ -572,25 +592,27 @@ class ClaudeDrivenScheduler:
                 minutes_ago = agent.get("minutes_ago", 0)
                 session_file = agent.get("session_file", "")
 
-                # 只处理执行者超时（非顾问）
-                if agent_name not in AGENT_ROLES.get("executors", []):
-                    logger.debug(f"  跳过顾问 {agent_name} 的超时")
+                # 只处理AI判定为阻塞进度的agent
+                key = (group_id, agent_name)
+                if key not in blocking_map:
+                    logger.debug(f"  跳过 {agent_name} - 超时但未阻塞任务进度")
                     continue
 
-                # 超时时间太短，不处理（小于阈值）
                 if minutes_ago < SESSION_TIMEOUT_MINUTES:
                     continue
 
+                block_info = blocking_map[key]
                 group_name = GROUPS.get(group_id, {}).get("name", group_id)
                 attempts = self.get_activation_attempts(group_id, agent_name)
 
-                logger.info(f"\n⚠️ 处理超时: {group_name} - {agent_name} ({minutes_ago}分钟无响应, 已激活{attempts}次)")
+                logger.info(f"\n⚠️ 阻塞任务进度: {group_name} - {agent_name} "
+                           f"({minutes_ago}分钟无响应, 已激活{attempts}次)")
+                logger.info(f"  阻塞原因: {block_info.get('task', '?')}")
 
                 if attempts >= 2:
                     # 已激活2次仍无响应，重置会话
                     logger.info(f"  🔄 连续激活{attempts}次无响应，执行会话重置")
                     if self.reset_agent_session(session_file, agent_name):
-                        # 清除激活计数
                         self.clear_activation_attempt(group_id, agent_name)
                         logger.info(f"  ✅ 会话已重置，下次调度将创建新会话")
                 else:
@@ -598,6 +620,10 @@ class ClaudeDrivenScheduler:
                     if self.send_activation_message(group_id, agent_name):
                         new_count = self.increment_activation_attempt(group_id, agent_name)
                         logger.info(f"  📢 激活消息已发送 (第{new_count}次)")
+                handled += 1
+
+        if handled == 0:
+            logger.info("  ✅ 无需处理的阻塞agent")
 
     def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
                            all_session_status: Dict[str, Dict],
@@ -1091,10 +1117,6 @@ data/bugs/TC-XXX_description.md
         total_msgs = sum(len(m) for m in all_group_messages.values())
         logger.info(f"\n📊 消息收集完成: {total_msgs}条消息, {len(GROUPS)}个群")
 
-        # ========== 第一步半：检查并处理超时会话 ==========
-        logger.info(f"\n🔍 检查超时会话...")
-        self.handle_timeout_agents(all_session_status)
-
         # ========== 第二步：综合分析，一次AI调用 ==========
         logger.info(f"\n🧠 综合分析所有群消息...")
         decisions, analysis = self.analyze_with_claude(
@@ -1139,6 +1161,11 @@ data/bugs/TC-XXX_description.md
                     logger.info(f"    {icon} {key}: {val}")
 
             logger.info(f"{'='*60}")
+
+        # ========== 第二步半：处理阻塞进度的超时agent（基于AI分析结果） ==========
+        blocking_agents = analysis.get("blocking_agents", []) if analysis else []
+        logger.info(f"\n🔍 处理阻塞进度的超时agent...")
+        self.handle_timeout_agents(all_session_status, blocking_agents)
 
         if not decisions:
             logger.info("  ✅ 无需跨群通知")
