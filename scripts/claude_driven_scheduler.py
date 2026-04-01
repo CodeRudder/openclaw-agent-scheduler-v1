@@ -488,6 +488,117 @@ class ClaudeDrivenScheduler:
 
         return result
 
+    def send_activation_message(self, group_id: str, agent_name: str) -> bool:
+        """发送激活消息到群，@Agent通知继续处理"""
+        channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
+        if not channel_id:
+            logger.warning(f"找不到群 {group_id} 的channel_id")
+            return False
+
+        message = f"@{agent_name} 请继续处理当前任务，会话已超时。"
+
+        try:
+            resp = requests.post(
+                f"{MM_URL}/api/v4/posts",
+                headers=self.headers,
+                json={
+                    "channel_id": channel_id,
+                    "message": message
+                },
+                timeout=10
+            )
+            resp.raise_for_status()
+            logger.info(f"  📢 已发送激活消息到 {GROUPS.get(group_id, {}).get('name', group_id)} @{agent_name}")
+            return True
+        except Exception as e:
+            logger.error(f"发送激活消息失败: {e}")
+            return False
+
+    def reset_agent_session(self, session_file: str, agent_name: str) -> bool:
+        """重置agent会话（重命名会话文件）"""
+        try:
+            session_path = Path(session_file)
+            if not session_path.exists():
+                logger.warning(f"会话文件不存在: {session_file}")
+                return False
+
+            # 重命名为 backup 文件
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = session_path.parent / f"{session_path.stem}_backup_{timestamp}.jsonl"
+            session_path.rename(backup_path)
+            logger.info(f"  🔄 已重置会话: {session_path.name} → {backup_path.name}")
+            return True
+        except Exception as e:
+            logger.error(f"重置会话失败: {e}")
+            return False
+
+    def get_activation_attempts(self, group_id: str, agent_name: str) -> int:
+        """获取激活尝试次数"""
+        attempts = self.notification_history.get("activation_attempts", {})
+        key = f"{group_id}:{agent_name}"
+        return attempts.get(key, 0)
+
+    def increment_activation_attempt(self, group_id: str, agent_name: str) -> int:
+        """增加激活尝试次数，返回新的次数"""
+        if "activation_attempts" not in self.notification_history:
+            self.notification_history["activation_attempts"] = {}
+        key = f"{group_id}:{agent_name}"
+        current = self.notification_history["activation_attempts"].get(key, 0)
+        new_count = current + 1
+        self.notification_history["activation_attempts"][key] = new_count
+        self._save_notification_history()
+        return new_count
+
+    def clear_activation_attempt(self, group_id: str, agent_name: str):
+        """清除激活尝试次数（会话恢复活动后调用）"""
+        if "activation_attempts" not in self.notification_history:
+            return
+        key = f"{group_id}:{agent_name}"
+        if key in self.notification_history["activation_attempts"]:
+            del self.notification_history["activation_attempts"][key]
+            self._save_notification_history()
+
+    def handle_timeout_agents(self, all_session_status: Dict):
+        """处理超时的agent会话：激活或重置"""
+        for group_id, status in all_session_status.items():
+            if not status.get("is_timeout"):
+                continue
+
+            for agent in status.get("agents", []):
+                if not agent.get("is_timeout"):
+                    continue
+
+                agent_name = agent["name"]
+                minutes_ago = agent.get("minutes_ago", 0)
+                session_file = agent.get("session_file", "")
+
+                # 只处理执行者超时（非顾问）
+                if agent_name not in AGENT_ROLES.get("executors", []):
+                    logger.debug(f"  跳过顾问 {agent_name} 的超时")
+                    continue
+
+                # 超时时间太短，不处理（小于阈值）
+                if minutes_ago < SESSION_TIMEOUT_MINUTES:
+                    continue
+
+                group_name = GROUPS.get(group_id, {}).get("name", group_id)
+                attempts = self.get_activation_attempts(group_id, agent_name)
+
+                logger.info(f"\n⚠️ 处理超时: {group_name} - {agent_name} ({minutes_ago}分钟无响应, 已激活{attempts}次)")
+
+                if attempts >= 2:
+                    # 已激活2次仍无响应，重置会话
+                    logger.info(f"  🔄 连续激活{attempts}次无响应，执行会话重置")
+                    if self.reset_agent_session(session_file, agent_name):
+                        # 清除激活计数
+                        self.clear_activation_attempt(group_id, agent_name)
+                        logger.info(f"  ✅ 会话已重置，下次调度将创建新会话")
+                else:
+                    # 发送激活消息
+                    if self.send_activation_message(group_id, agent_name):
+                        new_count = self.increment_activation_attempt(group_id, agent_name)
+                        logger.info(f"  📢 激活消息已发送 (第{new_count}次)")
+
     def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
                            all_session_status: Dict[str, Dict],
                            notification_history: Dict) -> tuple:
@@ -979,6 +1090,10 @@ data/bugs/TC-XXX_description.md
 
         total_msgs = sum(len(m) for m in all_group_messages.values())
         logger.info(f"\n📊 消息收集完成: {total_msgs}条消息, {len(GROUPS)}个群")
+
+        # ========== 第一步半：检查并处理超时会话 ==========
+        logger.info(f"\n🔍 检查超时会话...")
+        self.handle_timeout_agents(all_session_status)
 
         # ========== 第二步：综合分析，一次AI调用 ==========
         logger.info(f"\n🧠 综合分析所有群消息...")
