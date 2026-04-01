@@ -40,6 +40,7 @@ PROJECT_DIR = SCRIPT_DIR.parent
 CONFIG_FILE = PROJECT_DIR / "config" / "groups.yaml"
 PROMPT_FILE = PROJECT_DIR / "config" / "prompts" / "decision_prompt.md"
 HISTORY_FILE = PROJECT_DIR / "data" / "notification_history.json"
+PLAN_FILE = PROJECT_DIR / "data" / "scheduling_plan.json"
 
 # 日志目录
 LOG_DIR = PROJECT_DIR / "logs"
@@ -152,6 +153,7 @@ class ClaudeDrivenScheduler:
             "Authorization": f"Bearer {LITELLM_API_KEY}"
         }
         self.notification_history = self._load_notification_history()
+        self.scheduling_plan = self._load_scheduling_plan()
 
         # 加载提示词
         try:
@@ -181,6 +183,30 @@ class ClaudeDrivenScheduler:
                 json.dump(self.notification_history, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"保存通知历史失败: {e}")
+
+    def _load_scheduling_plan(self) -> Dict:
+        """加载调度计划"""
+        try:
+            if PLAN_FILE.exists():
+                with open(PLAN_FILE, 'r', encoding='utf-8') as f:
+                    plan = json.load(f)
+                    if plan:
+                        logger.info(f"📋 调度计划加载成功: {plan.get('current_version', '未知版本')}")
+                        return plan
+        except Exception as e:
+            logger.warning(f"加载调度计划失败: {e}")
+        return {}
+
+    def _save_scheduling_plan(self):
+        """保存调度计划"""
+        try:
+            PLAN_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.scheduling_plan["last_updated"] = datetime.now().isoformat()
+            with open(PLAN_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.scheduling_plan, f, ensure_ascii=False, indent=2)
+            logger.info("📋 调度计划已保存")
+        except Exception as e:
+            logger.error(f"保存调度计划失败: {e}")
 
     def get_group_messages(self, channel_id: str, limit: int = MESSAGES_PER_GROUP) -> List[GroupMessage]:
         """获取群消息 - 提取群成员和claw-admin消息，每成员最后10条"""
@@ -750,9 +776,10 @@ class ClaudeDrivenScheduler:
 
     def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
                            all_session_status: Dict[str, Dict],
-                           notification_history: Dict) -> tuple:
+                           notification_history: Dict,
+                           scheduling_plan: Dict = None) -> tuple:
         """综合所有群消息，一次AI调用做出全局决策。
-        返回: (decisions: List[SchedulingDecision], analysis: Dict)
+        返回: (decisions: List[SchedulingDecision], analysis: Dict, updated_plan: Dict)
         """
         """综合所有群消息，一次AI调用做出全局决策"""
 
@@ -799,18 +826,38 @@ class ClaudeDrivenScheduler:
                     f"内容={h.get('message_content', '')[:80]}\n"
                 )
 
+        # 构建调度计划信息
+        plan_str = ""
+        if scheduling_plan and scheduling_plan.get("milestones"):
+            plan_str = f"### 当前调度计划 (版本: {scheduling_plan.get('current_version', '未知')})\n"
+            plan_str += f"整体状态: {scheduling_plan.get('overall_status', '未知')}\n"
+            plan_str += "里程碑:\n"
+            for m in scheduling_plan.get("milestones", []):
+                status_icon = {"completed": "✅", "in_progress": "🔄", "blocked": "🚧", "pending": "⏳"}.get(m.get("status", ""), "•")
+                plan_str += f"  {status_icon} {m.get('id', '?')}. {m.get('name', '?')} [{m.get('status', '?')}]: {m.get('progress', '-')}\n"
+            if scheduling_plan.get("next_actions"):
+                plan_str += "下一步行动:\n"
+                for a in scheduling_plan["next_actions"]:
+                    plan_str += f"  → {a}\n"
+        else:
+            plan_str = "暂无调度计划（首次运行或计划已清空）"
+
         user_prompt = f"""## 所有工作群最新消息
 {groups_summary}
 
 ## Agent会话超时状态
 {session_info if session_info else "无超时"}
 
+## 调度计划
+{plan_str}
+
 {history_str}
 
 请综合分析以上所有群的消息，梳理项目整体进度和卡点问题，做出跨群调度决策。
 如果没有需要跨群协调的事项，decisions返回空数组 []。
 注意：raw_messages字段不需要填写，系统会自动从API获取。
-必须输出analysis部分，包含项目进度、各群当前任务、卡点问题。"""
+必须输出analysis部分，包含项目进度、各群当前任务、卡点问题。
+必须输出updated_plan部分，更新调度计划状态。"""
 
         try:
             resp = requests.post(
@@ -860,6 +907,9 @@ class ClaudeDrivenScheduler:
             # 提取分析报告
             analysis = parsed.get("analysis", {})
 
+            # 提取更新后的调度计划
+            updated_plan = parsed.get("updated_plan", {})
+
             # 提取决策列表
             decisions_data = parsed.get("decisions", [])
             if not isinstance(decisions_data, list):
@@ -883,11 +933,11 @@ class ClaudeDrivenScheduler:
                     qa_raw_messages="",
                     bug_doc_complete=d.get("bug_doc_complete", True)
                 ))
-            return results, analysis
+            return results, analysis, updated_plan
 
         except Exception as e:
             logger.error(f"综合分析失败: {e}")
-            return [], {}
+            return [], {}, {}
 
     def review_raw_message_with_ai(self, raw_content: str, decision: SchedulingDecision) -> str:
         """让AI审核并处理转发的原始消息，确保内容准确无歧义"""
@@ -1247,8 +1297,9 @@ data/bugs/TC-XXX_description.md
 
         # ========== 第二步：综合分析，一次AI调用 ==========
         logger.info(f"\n🧠 综合分析所有群消息...")
-        decisions, analysis = self.analyze_with_claude(
-            all_group_messages, all_session_status, self.notification_history
+        decisions, analysis, updated_plan = self.analyze_with_claude(
+            all_group_messages, all_session_status, self.notification_history,
+            self.scheduling_plan
         )
 
         # 输出分析报告
@@ -1289,6 +1340,20 @@ data/bugs/TC-XXX_description.md
                     logger.info(f"    {icon} {key}: {val}")
 
             logger.info(f"{'='*60}")
+
+        # ========== 更新并保存调度计划 ==========
+        if updated_plan:
+            self.scheduling_plan = updated_plan
+            self._save_scheduling_plan()
+            # 输出计划状态
+            logger.info(f"\n  📋 调度计划更新:")
+            logger.info(f"    版本: {updated_plan.get('current_version', '未知')}")
+            logger.info(f"    状态: {updated_plan.get('overall_status', '未知')}")
+            for m in updated_plan.get("milestones", []):
+                status_icon = {"completed": "✅", "in_progress": "🔄", "blocked": "🚧", "pending": "⏳"}.get(m.get("status", ""), "•")
+                logger.info(f"    {status_icon} {m.get('id', '?')}. {m.get('name', '?')} - {m.get('progress', '-')}")
+            for a in updated_plan.get("next_actions", []):
+                logger.info(f"    → {a}")
 
         # ========== 第二步半：处理阻塞任务（AI识别 → 脚本验证超时 → 激活） ==========
         blocking_tasks = analysis.get("blocking_tasks", []) if analysis else []

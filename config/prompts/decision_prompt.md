@@ -29,6 +29,14 @@
 3. **卡点问题**：哪些问题阻塞了流程，卡在哪个环节
 4. **各群真实状态**：区分已解决/处理中/未解决，注意识别混杂内容
 
+### 第一步半：对照调度计划评估进度
+如果存在调度计划，需要：
+1. **核对里程碑**：逐个检查计划中的里程碑状态，根据实际群消息更新
+2. **识别偏差**：如果实际进度与计划不符，记录偏差原因
+3. **推进下一步**：当前里程碑完成后，推动下一个里程碑开始
+4. **更新计划**：在`updated_plan`中返回最新的计划状态
+5. **新建计划**：如果没有调度计划（首次或版本已闭环），根据当前消息建立新计划
+
 ### 第二步：识别需要跨群协调的事项
 只有以下情况才需要跨群通知：
 1. **验收发现新BUG** → 通知开发群修复（必须附完整BUG文档）
@@ -77,7 +85,7 @@
 **注意**：`stopReason=aborted/error`是异常终止，需要立即恢复；`stopReason=stop`是主动停止，需要判断是否需要继续。
 
 ## 输出格式
-返回JSON对象，包含分析报告和决策列表：
+返回JSON对象，包含分析报告、决策列表和更新的调度计划：
 ```json
 {
   "analysis": {
@@ -121,7 +129,22 @@
       "bug_doc_complete": true,
       "source_group": "来源群组ID"
     }
-  ]
+  ],
+  "updated_plan": {
+    "current_version": "当前版本号",
+    "overall_status": "in_progress/completed/blocked",
+    "milestones": [
+      {
+        "id": "M1",
+        "name": "里程碑名称（如：V5.8开发）",
+        "status": "pending/in_progress/completed/blocked",
+        "progress": "当前进展描述",
+        "assigned_to": "负责agent（可选）",
+        "updated_at": "更新时间"
+      }
+    ],
+    "next_actions": ["下一步行动1", "下一步行动2"]
+  }
 }
 ```
 
@@ -129,9 +152,17 @@
 ```json
 {
   "analysis": { ... },
-  "decisions": []
+  "decisions": [],
+  "updated_plan": { ... }
 }
 ```
+
+**计划更新规则**:
+- 每次调度**必须**返回`updated_plan`字段
+- 根据实际群消息更新里程碑状态：`completed`(已完成) / `in_progress`(进行中) / `blocked`(被阻塞) / `pending`(未开始)
+- 如果没有现有计划，根据当前消息建立新计划，里程碑参考：开发→自测→验收→产品确认→部署
+- `next_actions`列出2-3个下一步关键行动
+- 版本闭环后，清空当前计划，等待新版本启动
 
 **字段要求**:
 - `analysis.blocking_tasks`: **关键字段** - 列出任务进度被阻塞的工作群+agent+任务
