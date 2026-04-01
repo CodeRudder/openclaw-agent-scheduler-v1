@@ -526,6 +526,51 @@ class ClaudeDrivenScheduler:
             logger.debug(f"解析jsonl stopReason失败 {jsonl_file}: {e}")
             return None
 
+    def get_last_assistant_messages(self, jsonl_file: Path, count: int = 2) -> List[Dict]:
+        """获取最后N条assistant消息，返回content(截断1KB)、stopReason、errorMessage"""
+        MAX_CONTENT_SIZE = 1024  # 1KB
+        try:
+            assistant_msgs = []
+            with open(jsonl_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+                        if msg.get("type") == "message":
+                            message = msg.get("message", {})
+                            if message.get("role") == "assistant":
+                                # 提取content
+                                content = message.get("content", "")
+                                # content可能是字符串或数组
+                                if isinstance(content, list):
+                                    # 提取text内容
+                                    text_parts = []
+                                    for item in content:
+                                        if isinstance(item, dict) and item.get("type") == "text":
+                                            text_parts.append(item.get("text", ""))
+                                        elif isinstance(item, str):
+                                            text_parts.append(item)
+                                    content = "\n".join(text_parts)
+
+                                # 截断到1KB
+                                if len(content) > MAX_CONTENT_SIZE:
+                                    content = content[:MAX_CONTENT_SIZE] + "...(截断)"
+
+                                assistant_msgs.append({
+                                    "content": content,
+                                    "stopReason": message.get("stopReason"),
+                                    "errorMessage": message.get("errorMessage")
+                                })
+                    except json.JSONDecodeError:
+                        continue
+            # 返回最后N条
+            return assistant_msgs[-count:] if assistant_msgs else []
+        except Exception as e:
+            logger.debug(f"读取assistant消息失败 {jsonl_file}: {e}")
+            return []
+
     def check_agent_session_status(self, group_id: str) -> Dict:
         """检查群的agent会话是否超时（基于最后一条assistant消息时间）"""
         agents = GROUPS.get(group_id, {}).get("agents", [])
@@ -570,6 +615,9 @@ class ClaudeDrivenScheduler:
             if stop_reason and stop_reason != "toolUse" and stop_reason != "endTurn":
                 logger.info(f"  📋 {agent_name} 会话状态: stopReason={stop_reason}")
 
+            # 获取最后2条assistant消息（用于AI分析）
+            last_assistant_msgs = self.get_last_assistant_messages(latest_file, count=2)
+
             result["has_session"] = True
             result["agents"].append({
                 "name": agent_name,
@@ -577,7 +625,8 @@ class ClaudeDrivenScheduler:
                 "minutes_ago": int(time_diff),
                 "is_timeout": is_timeout,
                 "stop_reason": stop_reason,
-                "session_file": str(latest_file)
+                "session_file": str(latest_file),
+                "last_assistant_messages": last_assistant_msgs
             })
 
         return result
@@ -828,6 +877,7 @@ class ClaudeDrivenScheduler:
 
         # 构建会话超时信息
         session_info = ""
+        agent_session_messages = ""  # Agent会话中最后的assistant消息
         for group_id, status in all_session_status.items():
             group_name = GROUPS.get(group_id, {}).get("name", group_id)
             # 包含超时和异常停止的agent
@@ -842,6 +892,20 @@ class ClaudeDrivenScheduler:
                     if sr in ("stop", "aborted", "error"):
                         info += f", 会话已停止(stopReason={sr})"
                     session_info += info + "\n"
+
+            # 收集所有有会话的agent的最后assistant消息
+            for agent in status.get("agents", []):
+                last_msgs = agent.get("last_assistant_messages", [])
+                if last_msgs:
+                    agent_session_messages += f"\n**{group_name} - {agent['name']}** (最近{len(last_msgs)}条assistant消息):\n"
+                    for i, msg in enumerate(last_msgs, 1):
+                        sr = msg.get("stopReason", "")
+                        em = msg.get("errorMessage", "")
+                        content = msg.get("content", "(空)")
+                        agent_session_messages += f"  [{i}] stopReason={sr}"
+                        if em:
+                            agent_session_messages += f", error={em}"
+                        agent_session_messages += f"\n  内容: {content}\n"
 
         # 构建通知历史
         history_str = ""
@@ -875,6 +939,9 @@ class ClaudeDrivenScheduler:
 
         user_prompt = f"""## 所有工作群最新消息
 {groups_summary}
+
+## Agent会话内部消息（assistant最后2条，用于判断agent真实工作状态）
+{agent_session_messages if agent_session_messages else "无会话消息"}
 
 ## Agent会话超时状态
 {session_info if session_info else "无超时"}
