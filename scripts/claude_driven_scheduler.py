@@ -439,9 +439,12 @@ class ClaudeDrivenScheduler:
             return None
 
     def get_last_assistant_stop_reason(self, jsonl_file: Path) -> Optional[str]:
-        """获取最后一条assistant消息的stopReason（检测异常终止）"""
+        """获取最后一条assistant消息的stopReason（检测异常终止/主动停止）
+        如果最后一条消息是user消息（即有新请求），返回None表示处理中
+        """
         try:
             last_stop_reason = None
+            last_role = None
             with open(jsonl_file, 'r', encoding='utf-8') as f:
                 for line in f:
                     line = line.strip()
@@ -451,10 +454,16 @@ class ClaudeDrivenScheduler:
                         msg = json.loads(line)
                         if msg.get("type") == "message":
                             message = msg.get("message", {})
-                            if message.get("role") == "assistant":
+                            role = message.get("role")
+                            if role == "assistant":
                                 last_stop_reason = message.get("stopReason")
+                                last_role = "assistant"
+                            elif role == "user":
+                                last_role = "user"
+                                last_stop_reason = None  # 有新user消息，重置为处理中
                     except json.JSONDecodeError:
                         continue
+            # 如果最后一条是user消息，说明agent正在处理，返回None
             return last_stop_reason
         except Exception as e:
             logger.debug(f"解析jsonl stopReason失败 {jsonl_file}: {e}")
@@ -499,12 +508,18 @@ class ClaudeDrivenScheduler:
                 result["is_timeout"] = True
                 logger.info(f"⚠️ {agent_name} 会话超时 ({int(time_diff)}分钟无响应)")
 
+            # 获取会话停止原因
+            stop_reason = self.get_last_assistant_stop_reason(latest_file)
+            if stop_reason and stop_reason != "toolUse" and stop_reason != "endTurn":
+                logger.info(f"  📋 {agent_name} 会话状态: stopReason={stop_reason}")
+
             result["has_session"] = True
             result["agents"].append({
                 "name": agent_name,
                 "last_activity": last_activity.isoformat() if last_activity else None,
                 "minutes_ago": int(time_diff),
                 "is_timeout": is_timeout,
+                "stop_reason": stop_reason,
                 "session_file": str(latest_file)
             })
 
@@ -534,6 +549,32 @@ class ClaudeDrivenScheduler:
             return True
         except Exception as e:
             logger.error(f"发送激活消息失败: {e}")
+            return False
+
+    def send_task_inquiry_message(self, group_id: str, agent_name: str, task_desc: str) -> bool:
+        """发送任务询问消息，询问Agent任务完成情况"""
+        channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
+        if not channel_id:
+            logger.warning(f"找不到群 {group_id} 的channel_id")
+            return False
+
+        message = f"@{agent_name} 请确认当前任务进度：{task_desc[:50]}... 是否已完成？如有问题请说明。"
+
+        try:
+            resp = requests.post(
+                f"{MM_URL}/api/v4/posts",
+                headers=self.headers,
+                json={
+                    "channel_id": channel_id,
+                    "message": message
+                },
+                timeout=10
+            )
+            resp.raise_for_status()
+            logger.info(f"  📋 已发送任务询问到 {GROUPS.get(group_id, {}).get('name', group_id)} @{agent_name}")
+            return True
+        except Exception as e:
+            logger.error(f"发送任务询问失败: {e}")
             return False
 
     def reset_agent_session(self, session_file: str, agent_name: str) -> bool:
@@ -644,6 +685,15 @@ class ClaudeDrivenScheduler:
                 handled += 1
                 continue
 
+            # ===== 步骤2a2：检查会话是否主动停止（stopReason=stop） =====
+            if stop_reason == "stop":
+                logger.info(f"\n  📋 会话已停止: {group_name}-{agent_name}: {task_desc}")
+                logger.info(f"     stopReason=stop → 询问任务完成情况")
+                self.send_task_inquiry_message(group_id, agent_name, task_desc)
+                self.clear_activation_attempt(group_id, agent_name)
+                handled += 1
+                continue
+
             # ===== 步骤2b：检查会话活动是否超时 =====
             last_activity = self.get_last_assistant_message_time(latest_file)
 
@@ -721,14 +771,19 @@ class ClaudeDrivenScheduler:
         # 构建会话超时信息
         session_info = ""
         for group_id, status in all_session_status.items():
-            if status.get("is_timeout"):
-                group_name = GROUPS.get(group_id, {}).get("name", group_id)
-                timeout_agents = [a for a in status.get("agents", []) if a.get("is_timeout")]
-                if timeout_agents:
-                    session_info += f"\n**{group_name}**:\n"
-                    for agent in timeout_agents:
-                        role = "执行者" if agent["name"] in AGENT_ROLES.get("executors", []) else "顾问"
-                        session_info += f"  - {agent['name']} ({role}): {agent['minutes_ago']}分钟无响应\n"
+            group_name = GROUPS.get(group_id, {}).get("name", group_id)
+            # 包含超时和异常停止的agent
+            notable_agents = [a for a in status.get("agents", [])
+                             if a.get("is_timeout") or a.get("stop_reason") in ("stop", "aborted", "error")]
+            if notable_agents:
+                session_info += f"\n**{group_name}**:\n"
+                for agent in notable_agents:
+                    role = "执行者" if agent["name"] in AGENT_ROLES.get("executors", []) else "顾问"
+                    info = f"  - {agent['name']} ({role}): {agent['minutes_ago']}分钟无响应"
+                    sr = agent.get("stop_reason")
+                    if sr in ("stop", "aborted", "error"):
+                        info += f", 会话已停止(stopReason={sr})"
+                    session_info += info + "\n"
 
         # 构建通知历史
         history_str = ""
