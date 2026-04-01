@@ -658,13 +658,13 @@ class ClaudeDrivenScheduler:
             return False
 
     def send_task_inquiry_message(self, group_id: str, agent_name: str, task_desc: str) -> bool:
-        """发送任务询问消息，询问Agent任务完成情况"""
+        """发送任务询问消息，询问Agent任务完成情况，未完成则继续处理"""
         channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
         if not channel_id:
             logger.warning(f"找不到群 {group_id} 的channel_id")
             return False
 
-        message = f"@{agent_name} 请确认当前任务进度：{task_desc[:50]}... 是否已完成？如有问题请说明。"
+        message = f"@{agent_name} 请确认任务进度：{task_desc[:50]}...\n如已完成请回复确认，如未完成请继续处理。"
 
         try:
             resp = requests.post(
