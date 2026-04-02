@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenClaw Agent Session Recovery Service
+After=network.target
+
+[Service]
+Type=simple
+User=gongdewei
+WorkingDirectory=/home/gongdewei/work/projects/code-rudder/openclaw-agent-scheduler
+ExecStart=/usr/bin/python3 /home/gongdewei/work/projects/code-rudder/openclaw-agent-scheduler/scripts/quick_session_recovery.py --loop --interval 60
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
