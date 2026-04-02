@@ -704,13 +704,14 @@ class ClaudeDrivenScheduler:
         return result
 
     def send_activation_message(self, group_id: str, agent_name: str) -> bool:
-        """发送激活消息到群，@Agent通知继续处理"""
+        """发送激活消息到群，@Agent通知继续处理（简洁版，不重复历史内容）"""
         channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
         if not channel_id:
             logger.warning(f"找不到群 {group_id} 的channel_id")
             return False
 
-        message = f"@{agent_name} 请继续处理当前任务，会话已超时。当前上下文使用率低于90%，可以放心执行任务。请分步完成，上下文会自动压缩，无需担心token限制。专注当前步骤完成即可。"
+        # 简洁激活消息，不复述历史
+        message = f"@{agent_name} 🔄 请继续处理当前任务。"
 
         try:
             resp = requests.post(
@@ -730,13 +731,14 @@ class ClaudeDrivenScheduler:
             return False
 
     def send_task_inquiry_message(self, group_id: str, agent_name: str, task_desc: str) -> bool:
-        """发送任务询问消息，询问Agent任务完成情况，未完成则继续处理"""
+        """发送任务询问消息（简洁版，不重复历史内容）"""
         channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
         if not channel_id:
             logger.warning(f"找不到群 {group_id} 的channel_id")
             return False
 
-        message = f"@{agent_name} 请确认任务进度：{task_desc[:50]}...\n如已完成请回复确认结果，如未完成请分步继续处理。当前上下文使用率低于90%，可以放心执行任务。上下文会自动压缩，无需担心token限制，专注当前步骤完成即可。"
+        # 简洁询问消息
+        message = f"@{agent_name} 📋 任务进度确认：请回复完成结果或继续处理。"
 
         try:
             resp = requests.post(
@@ -946,7 +948,7 @@ class ClaudeDrivenScheduler:
 
         return False
 
-    def _send_activation_only(self, decision: SchedulingDecision) -> bool:
+    def _send_activation_only(self, decision) -> bool:
         """发送简短激活消息（不重复发送完整任务详情）
 
         用于已收到任务通知但会话停止的agent，只需激活而不重复任务内容
@@ -959,16 +961,8 @@ class ClaudeDrivenScheduler:
         group_name = GROUPS.get(group_id, {}).get("name", group_id)
         mentions = " ".join([f"@{u.lstrip('@')}" for u in decision.mention_users])
 
-        # 简短激活消息
-        message = f"""{mentions}
-
-🔄 **任务激活提醒**
-
-你正在处理的任务仍在进行中，请继续：
-- 问题: {', '.join(decision.extracted_issues[:2]) if decision.extracted_issues else '继续之前的工作'}
-- 详情请查看之前的任务通知
-
-💡 如已完成请报告结果，如遇阻塞请说明原因。"""
+        # 简洁激活消息（不重复历史内容）
+        message = f"{mentions} 🔄 请继续处理当前任务，详情见之前的通知。"
 
         try:
             self.bot.create_post(channel_id, message)
@@ -1102,10 +1096,13 @@ class ClaudeDrivenScheduler:
         检查条件：
         1. AI分析中该agent有任务且状态为"处理中"
         2. 会话stopReason为stop/error/aborted
+        3. 未在激活冷却期内（避免频繁激活）
+        4. 会话活动时间无变化（确认真正停滞）
 
-        满足条件则立即发送询问消息
+        满足条件则发送询问消息
         """
         handled = 0
+        ACTIVATION_COOLDOWN_MINUTES = 5  # 激活冷却时间5分钟
 
         # 从AI分析中获取所有"处理中"的任务
         active_tasks = {}  # (group_id, agent_name) -> task_desc
@@ -1158,6 +1155,31 @@ class ClaudeDrivenScheduler:
 
             # 检查stopReason是否为异常值
             if stop_reason in ("stop", "aborted", "error"):
+                # 获取当前会话活动时间
+                current_activity = agent_status.get("last_activity")
+
+                # 检查会话是否在持续更新（活动时间有变化）
+                if current_activity and self._is_session_actively_updating(group_id, agent_name, current_activity):
+                    logger.info(f"  ✅ {group_name}-{agent_name} 会话正在更新中，跳过激活")
+                    # 更新记录的活动时间
+                    self._record_activation_time(group_id, agent_name, current_activity.isoformat() if hasattr(current_activity, 'isoformat') else str(current_activity))
+                    continue
+
+                # 检查激活冷却期，避免频繁激活
+                attempts = self.notification_history.get("activation_attempts", {})
+                key = f"{group_id}:{agent_name}"
+                last_activation = attempts.get(key, {}).get("last_activation_time")
+
+                if last_activation:
+                    try:
+                        last_time = datetime.fromisoformat(last_activation)
+                        minutes_since = (datetime.now() - last_time).total_seconds() / 60
+                        if minutes_since < ACTIVATION_COOLDOWN_MINUTES:
+                            logger.info(f"  ⏳ {group_name}-{agent_name} 在冷却期内（{int(minutes_since)}分钟前已激活），跳过")
+                            continue
+                    except Exception:
+                        pass
+
                 logger.info(f"\n  📋 会话异常停止: {group_name}-{agent_name}")
                 logger.info(f"     任务: {task_desc[:50]}...")
                 logger.info(f"     stopReason={stop_reason} → 发送询问消息")
@@ -1168,11 +1190,58 @@ class ClaudeDrivenScheduler:
                     # aborted/error 发送激活消息
                     self.send_activation_message(group_id, agent_name)
 
-                self.clear_activation_attempt(group_id, agent_name)
+                # 记录本次激活时间和会话活动时间
+                activity_str = current_activity.isoformat() if current_activity and hasattr(current_activity, 'isoformat') else None
+                self._record_activation_time(group_id, agent_name, activity_str)
                 handled += 1
 
         if handled == 0:
             logger.info("  ✅ 所有处理中任务的会话状态正常")
+
+    def _record_activation_time(self, group_id: str, agent_name: str, session_activity: str = None):
+        """记录激活时间和会话活动时间，用于冷却期检查"""
+        if "activation_attempts" not in self.notification_history:
+            self.notification_history["activation_attempts"] = {}
+        key = f"{group_id}:{agent_name}"
+        existing = self.notification_history["activation_attempts"].get(key, {})
+        if not isinstance(existing, dict):
+            existing = {"count": existing or 0}
+
+        existing["last_activation_time"] = datetime.now().isoformat()
+        if session_activity:
+            existing["session_activity_at_activation"] = session_activity
+        self.notification_history["activation_attempts"][key] = existing
+        self._save_notification_history()
+
+    def _is_session_actively_updating(self, group_id: str, agent_name: str, current_activity: datetime) -> bool:
+        """检查会话是否在持续更新（活动时间有变化）
+
+        Args:
+            group_id: 群组ID
+            agent_name: Agent名称
+            current_activity: 当前会话活动时间
+
+        Returns:
+            True表示会话在持续更新，False表示停滞
+        """
+        attempts = self.notification_history.get("activation_attempts", {})
+        key = f"{group_id}:{agent_name}"
+        record = attempts.get(key, {})
+
+        if not isinstance(record, dict):
+            return False
+
+        last_recorded = record.get("session_activity_at_activation")
+        if not last_recorded or not current_activity:
+            return False
+
+        try:
+            # 比较活动时间是否有变化
+            current_str = current_activity.isoformat()
+            # 如果活动时间有变化，说明会话在更新
+            return current_str != last_recorded
+        except Exception:
+            return False
 
     def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
                            all_session_status: Dict[str, Dict],
