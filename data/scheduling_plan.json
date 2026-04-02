@@ -1,132 +1,36 @@
 {
   "current_version": "V5.9",
-  "overall_status": "in_progress",
+  "overall_status": "blocked",
   "milestones": [
     {
       "id": "M1",
-      "name": "V5.8版本闭环",
-      "status": "completed",
-      "progress": "QA验收通过，产品确认，完整版本部署成功，已于2026-04-02正式闭环",
-      "assigned_to": "all",
-      "updated_at": "2026-04-02T00:16:00Z"
+      "name": "V5.9测试失败修复",
+      "status": "blocked",
+      "progress": "V5.9版本测试有大量失败用例，必须修复完成后才能启动V5.10。禁止跳过当前版本！",
+      "assigned_to": "fullstack-dev",
+      "updated_at": "2026-04-02T20:55:00"
     },
     {
       "id": "M2",
-      "name": "V5.9 PRD文档编写",
-      "status": "completed",
-      "progress": "PRD文档已完成（9.4KB），功能范围确认",
-      "assigned_to": "product",
-      "updated_at": "2026-04-01T10:00:00Z"
+      "name": "V5.9回归验证",
+      "status": "pending",
+      "progress": "等待BUG修复完成后执行全量回归测试，必须100%通过才能闭环",
+      "assigned_to": "qa",
+      "updated_at": "2026-04-02T20:55:00"
     },
     {
       "id": "M3",
-      "name": "V5.9技术方案评审",
-      "status": "completed",
-      "progress": "架构师技术评审已通过，技术方案已就绪（40KB）",
-      "assigned_to": "architect",
-      "updated_at": "2026-04-01T12:00:00Z"
-    },
-    {
-      "id": "M4",
-      "name": "V5.9 UI设计",
-      "status": "completed",
-      "progress": "P1+P2功能原型设计全部完成（8个页面，36稿设计稿）",
-      "assigned_to": "ui-designer",
-      "updated_at": "2026-04-02T02:08:00Z"
-    },
-    {
-      "id": "M4.5",
-      "name": "全系统集成测试脚本编写",
-      "status": "completed",
-      "progress": "52/52测试脚本100%完成，10个功能模块全覆盖",
-      "assigned_to": "qa",
-      "updated_at": "2026-04-02T04:00:00Z"
-    },
-    {
-      "id": "M4.6",
-      "name": "V5.9 UI设计评审会议",
-      "status": "completed",
-      "progress": "UI设计评审会议已于2026-04-02上午圆满完成",
-      "assigned_to": "product",
-      "updated_at": "2026-04-02T02:08:00Z"
-    },
-    {
-      "id": "M4.7",
-      "name": "V5.9高保真设计稿",
-      "status": "completed",
-      "progress": "高保真视觉设计工作已全部完成（5个核心文档130KB）",
-      "assigned_to": "ui-designer",
-      "updated_at": "2026-04-02T03:13:00Z"
-    },
-    {
-      "id": "M4.8",
-      "name": "V5.9开发环境准备",
-      "status": "completed",
-      "progress": "环境100%就绪",
-      "assigned_to": "ops",
-      "updated_at": "2026-04-02T08:00:00Z"
-    },
-    {
-      "id": "M4.9",
-      "name": "集成测试脚本验证",
-      "status": "completed",
-      "progress": "5/5子步骤完成：测试脚本验证执行完成（145用例），BUG报告已生成，待开发功能清单已生成",
-      "assigned_to": "qa",
-      "updated_at": "2026-04-02T16:50:00Z"
-    },
-    {
-      "id": "M5.1",
-      "name": "V5.9 Webhook模块开发",
-      "status": "completed",
-      "progress": "Webhook模块开发100%完成：7个API全部通过，代码已提交（commit ba6f1b4）",
-      "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T16:11:00Z"
-    },
-    {
-      "id": "M5.2",
-      "name": "V5.9自定义角色权限功能开发",
-      "status": "completed",
-      "progress": "角色权限模块开发100%完成：8个API端点全部通过，代码已提交（commit 4878084）",
-      "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T16:11:00Z"
-    },
-    {
-      "id": "M5.3",
-      "name": "V5.9高级报表分析功能开发",
-      "status": "completed",
-      "progress": "高级报表模块开发100%完成：3个API端点全部通过，代码已提交（commit 23fe0d3）",
-      "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T16:24:00Z"
-    },
-    {
-      "id": "M5.4",
-      "name": "V5.9开放API接口功能开发",
-      "status": "completed",
-      "progress": "开放API模块开发100%完成：3个API端点全部通过，代码已提交（commit 4878084）",
-      "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T16:33:00Z"
-    },
-    {
-      "id": "M6.1",
-      "name": "V5.9 P1问题修复",
-      "status": "completed",
-      "progress": "P1问题已全部修复：代码已合并到prepare/v5.9分支，21个API端点自测100%通过",
-      "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T17:59:00Z"
-    },
-    {
-      "id": "M6",
-      "name": "V5.9测试验收",
-      "status": "in_progress",
-      "progress": "4/5子步骤完成：第4轮测试30/145通过（20.7%），已更新3个测试文件，QA会话因API速率限制中断，需恢复继续更新剩余10个测试文件",
-      "assigned_to": "qa",
-      "updated_at": "2026-04-02T18:14:00Z"
+      "name": "V5.10需求规划",
+      "status": "pending",
+      "progress": "⚠️ 被阻塞：必须等V5.9测试100%通过后才能启动",
+      "assigned_to": "product,qa,architect",
+      "updated_at": "2026-04-02T20:55:00"
     }
   ],
   "next_actions": [
-    "QA恢复会话后继续更新剩余测试脚本（Webhook 4个、Permission 6个文件），添加缺失的必填参数（projectId等）",
-    "QA完成脚本更新后执行第5轮全量回归测试（145用例），目标通过率≥85%",
-    "测试通过后通知product确认验收结果，准备V5.9正式上线"
+    "fullstack-dev立即修复V5.9测试失败的用例",
+    "QA输出完整的失败用例清单和BUG报告",
+    "V5.9修复完成并通过回归测试后，才能启动V5.10"
   ],
-  "last_updated": "2026-04-02T18:26:02.854702"
+  "last_updated": "2026-04-02T20:55:00.000000"
 }

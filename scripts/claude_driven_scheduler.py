@@ -309,6 +309,48 @@ class ClaudeDrivenScheduler:
             self._save_scheduling_plan()
             logger.info("📋 调度计划修正完成")
 
+        # 额外检查：当前版本有测试失败时，禁止启动新版本
+        current_version = self.scheduling_plan.get("current_version", "")
+        if current_version:
+            # 检查当前版本是否有测试失败
+            current_version_failed = False
+            for milestone in self.scheduling_plan.get("milestones", []):
+                name = milestone.get("name", "")
+                progress = milestone.get("progress", "")
+                status = milestone.get("status", "")
+
+                # 检查是否包含当前版本号且是测试相关里程碑
+                if current_version in name and any(kw in name for kw in ["测试", "验收", "集成"]):
+                    # 检查是否有失败
+                    match = re.search(r'(\d+)\s*失败', progress)
+                    if match and int(match.group(1)) > 0 and status != "completed":
+                        # 有失败且未完成
+                        current_version_failed = True
+                        break
+
+            # 如果当前版本有测试失败，检查是否有新版本里程碑
+            if current_version_failed:
+                for milestone in self.scheduling_plan.get("milestones", []):
+                    name = milestone.get("name", "")
+                    status = milestone.get("status", "")
+
+                    # 检查是否有其他版本（非当前版本）的里程碑正在进行
+                    if current_version not in name and status in ("in_progress", "pending"):
+                        logger.warning(f"⚠️ 版本质量违规: 当前版本{current_version}有测试失败，但'{name}'已启动")
+                        # 将新版本里程碑改为blocked
+                        milestone["status"] = "blocked"
+                        milestone["progress"] = milestone.get("progress", "") + f" [系统修正: 被阻塞，{current_version}测试未通过]"
+                        corrected = True
+
+                if corrected:
+                    # 更新next_actions
+                    self.scheduling_plan["next_actions"] = [
+                        f"优先修复{current_version}测试失败问题",
+                        f"{current_version}测试100%通过后才能启动新版本",
+                    ]
+                    self._save_scheduling_plan()
+                    logger.info("📋 版本质量规则修正完成")
+
         return corrected
 
     def get_group_messages(self, channel_id: str, limit: int = MESSAGES_PER_GROUP) -> List[GroupMessage]:
