@@ -2081,48 +2081,31 @@ data/bugs/TC-XXX_description.md
             if milestone.get("status") in ("in_progress", "blocked"):
                 logger.info(f"  • {milestone.get('name')}: {milestone.get('status')} → @{milestone.get('assigned_to')}")
 
-        # ========== 第一阶段：快速检查活跃任务 ==========
-        quick_result = self._quick_check_active_tasks(active_agents_by_group)
-        quick_decisions, need_full_analysis, quick_session_status, quick_msg_count = quick_result
+        # ========== 先检查是否需要强制完整分析（20分钟兜底） ==========
+        need_force_full = self._should_force_full_analysis()
 
         all_group_messages = {}
         all_session_status = {}
-        total_msgs = quick_msg_count  # 初始化为快速检查的消息数
-        updated_plan = self.scheduling_plan  # 初始化调度计划
+        total_msgs = 0
+        updated_plan = self.scheduling_plan
+        decisions = None
+        analysis = {}
 
-        # 判断是否需要第二阶段完整分析
-        # 优先信任第一阶段的决策：如果有决策就执行，不强制完整分析
-        need_second_phase = False
-
-        if quick_decisions is None:
-            # 第一阶段未做出决策，需要完整分析
-            need_second_phase = True
-            logger.info(f"  📋 第一阶段未做出决策，需要完整分析")
-        elif not quick_decisions:
-            # 第一阶段返回空决策，可能需要完整分析
-            need_second_phase = True
-            logger.info(f"  📋 第一阶段返回空决策，需要完整分析")
+        if need_force_full:
+            # ========== 直接进入完整分析，跳过快速检查 ==========
+            logger.info(f"  ⏭️ 20分钟兜底，跳过快速检查，直接执行完整分析")
         else:
-            # 第一阶段有决策，检查是否需要20分钟兜底
-            # 注意：有决策时优先执行决策，只有决策不够时才强制完整分析
-            need_force_full = self._should_force_full_analysis()
-            if need_force_full:
-                need_second_phase = True
+            # ========== 第一阶段：快速检查活跃任务 ==========
+            quick_result = self._quick_check_active_tasks(active_agents_by_group)
+            quick_decisions, _, quick_session_status, quick_msg_count = quick_result
 
-        if quick_decisions is not None and not need_second_phase:
-            # 快速检查已做出决策，检查是否需要完整分析补充
-            decisions = quick_decisions
+            all_session_status = quick_session_status
+            total_msgs = quick_msg_count
 
-            # 如果决策为空，可能需要完整分析
-            if not decisions:
-                need_full_analysis = True
-            else:
-                # 有决策，先执行，不需要完整分析
-                need_full_analysis = False
-                # 使用快速分析时的会话状态和消息
-                all_session_status = quick_session_status
+            if quick_decisions:
+                # 第一阶段有决策，使用它，跳过完整分析
+                decisions = quick_decisions
                 # 复用快速分析的消息到 all_group_messages（用于后续统计）
-                all_group_messages = {}
                 for group_id in active_agents_by_group.keys():
                     channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
                     if channel_id:
@@ -2130,10 +2113,14 @@ data/bugs/TC-XXX_description.md
                         all_group_messages[group_id] = messages
                     else:
                         all_group_messages[group_id] = []
-                # 重新计算 total_msgs
                 total_msgs = sum(len(m) for m in all_group_messages.values())
+                logger.info(f"  ✅ 快速检查已做出 {len(decisions)} 个决策，跳过完整分析")
+            else:
+                # 第一阶段无决策，需要完整分析
+                need_force_full = True
+                logger.info(f"  📋 快速检查未做出有效决策，需要完整分析")
 
-        if need_second_phase:
+        if need_force_full:
             # ========== 第二阶段：完整分析所有群 ==========
             logger.info(f"\n🔍 第二阶段：完整分析所有群...")
 
