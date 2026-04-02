@@ -317,5 +317,70 @@ class TestQualityGate:
         assert dev_task["status"] == "blocked"  # 应出现在blocking_tasks
 
 
+class TestDuplicateNotificationDetection:
+    """测试重复任务通知检测逻辑"""
+
+    def test_tc_number_matching(self):
+        """TC编号匹配检测"""
+        import re
+        # 模拟历史通知
+        history = [
+            {
+                "target_group": "dev-working-group",
+                "mention_users": ["fullstack-dev"],
+                "extracted_issues": ["TC-TASK-001: 创建任务API错误", "TC-TASK-002: 更新任务API错误"]
+            }
+        ]
+        # 当前决策 - 相同TC编号
+        current_issues = ["TC-TASK-001: P0级BUG需要修复"]
+        # 检测逻辑：TC编号有交集
+        hist_tcs = set()
+        for issue in history[0]["extracted_issues"]:
+            hist_tcs.update(re.findall(r'(TC-[A-Z]+-\d+)', issue, re.IGNORECASE))
+        curr_tcs = set()
+        for issue in current_issues:
+            curr_tcs.update(re.findall(r'(TC-[A-Z]+-\d+)', issue, re.IGNORECASE))
+        # 应该检测到交集
+        assert hist_tcs & curr_tcs == {"TC-TASK-001"}
+
+    def test_keyword_matching(self):
+        """关键词匹配检测"""
+        import re
+        history = [
+            {
+                "target_group": "dev-working-group",
+                "mention_users": ["fullstack-dev"],
+                "extracted_issues": ["P0 BUG: 登录验证失败"]
+            }
+        ]
+        current_issues = ["P0 BUG: 需要立即处理"]
+        # 关键词：P0, BUG - 重合度100%
+        hist_keywords = set()
+        for issue in history[0]["extracted_issues"]:
+            hist_keywords.update(k.upper() for k in re.findall(r'\b(P[0-2]|BUG)\b', issue))
+        curr_keywords = set()
+        for issue in current_issues:
+            curr_keywords.update(k.upper() for k in re.findall(r'\b(P[0-2]|BUG)\b', issue))
+        # 应该检测到关键词匹配
+        assert hist_keywords == {"P0", "BUG"}
+        assert len(hist_keywords & curr_keywords) >= 1
+
+    def test_different_agent_no_duplicate(self):
+        """不同agent不算重复"""
+        history = [
+            {
+                "target_group": "dev-working-group",
+                "mention_users": ["architect"],
+                "extracted_issues": ["TC-TASK-001: API设计问题"]
+            }
+        ]
+        # 当前决策 - 相同TC但不同agent (fullstack-dev vs architect)
+        # agent不匹配，不应算重复
+        hist_mention = set(u.lstrip('@').lower() for u in history[0]["mention_users"])
+        curr_mention = {"fullstack-dev"}
+        # 没有交集
+        assert not (hist_mention & curr_mention)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

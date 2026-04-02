@@ -883,6 +883,101 @@ class ClaudeDrivenScheduler:
             del self.notification_history["activation_attempts"][key]
             self._save_notification_history()
 
+    def _is_duplicate_task_notification(self, decision: SchedulingDecision, lookback: int = 5) -> bool:
+        """检查是否已通知过相同任务（基于extracted_issues匹配）
+
+        Args:
+            decision: 当前调度决策
+            lookback: 检查最近多少条通知历史
+
+        Returns:
+            True表示已通知过相同任务，应该跳过或只发送激活消息
+        """
+        if not decision.extracted_issues:
+            return False
+
+        history = self.notification_history.get("history", [])
+        recent_history = history[-lookback:] if len(history) > lookback else history
+
+        # 提取当前决策的TC编号和关键词
+        import re
+        current_tcs = set()
+        current_keywords = set()
+        for issue in decision.extracted_issues:
+            # 提取TC编号
+            tcs = re.findall(r'(TC-[A-Z]+-\d+)', issue, re.IGNORECASE)
+            current_tcs.update(tcs)
+            # 提取关键词（P0、P1、BUG、API等）
+            keywords = re.findall(r'\b(P[0-2]|BUG|API|错误|失败)\b', issue, re.IGNORECASE)
+            current_keywords.update(k.upper() for k in keywords)
+
+        # 检查历史通知
+        for hist in recent_history:
+            # 检查是否通知了相同的agent
+            hist_mention = set(u.lstrip('@').lower() for u in hist.get("mention_users", []))
+            curr_mention = set(u.lstrip('@').lower() for u in decision.mention_users)
+            if not (hist_mention & curr_mention):  # 没有交集，不同agent
+                continue
+
+            # 检查是否通知了相同的目标群
+            if hist.get("target_group") != decision.target_group:
+                continue
+
+            # 检查问题是否相同（通过TC编号或关键词匹配）
+            hist_issues = hist.get("extracted_issues", [])
+            hist_tcs = set()
+            hist_keywords = set()
+            for issue in hist_issues:
+                tcs = re.findall(r'(TC-[A-Z]+-\d+)', issue, re.IGNORECASE)
+                hist_tcs.update(tcs)
+                keywords = re.findall(r'\b(P[0-2]|BUG|API|错误|失败)\b', issue, re.IGNORECASE)
+                hist_keywords.update(k.upper() for k in keywords)
+
+            # TC编号有交集，或者关键词重合度超过50%
+            if current_tcs and hist_tcs and (current_tcs & hist_tcs):
+                logger.info(f"  🔄 检测到重复任务通知: TC编号匹配 {current_tcs & hist_tcs}")
+                return True
+
+            if current_keywords and hist_keywords:
+                overlap = len(current_keywords & hist_keywords)
+                if overlap >= min(len(current_keywords), len(hist_keywords)) * 0.5:
+                    logger.info(f"  🔄 检测到重复任务通知: 关键词匹配 {current_keywords & hist_keywords}")
+                    return True
+
+        return False
+
+    def _send_activation_only(self, decision: SchedulingDecision) -> bool:
+        """发送简短激活消息（不重复发送完整任务详情）
+
+        用于已收到任务通知但会话停止的agent，只需激活而不重复任务内容
+        """
+        group_id = decision.target_group
+        channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
+        if not channel_id:
+            return False
+
+        group_name = GROUPS.get(group_id, {}).get("name", group_id)
+        mentions = " ".join([f"@{u.lstrip('@')}" for u in decision.mention_users])
+
+        # 简短激活消息
+        message = f"""{mentions}
+
+🔄 **任务激活提醒**
+
+你正在处理的任务仍在进行中，请继续：
+- 问题: {', '.join(decision.extracted_issues[:2]) if decision.extracted_issues else '继续之前的工作'}
+- 详情请查看之前的任务通知
+
+💡 如已完成请报告结果，如遇阻塞请说明原因。"""
+
+        try:
+            self.bot.create_post(channel_id, message)
+            logger.info(f"  ✅ 已发送激活消息到 {group_name}")
+            return True
+        except Exception as e:
+            logger.error(f"  ❌ 发送激活消息失败: {e}")
+            return False
+
     def handle_timeout_agents(self, blocking_tasks: List[Dict]):
         """处理阻塞任务的agent：AI识别阻塞任务 → 装入检查会话超时 → 仅激活确认超时的
         Args:
@@ -1315,7 +1410,10 @@ class ClaudeDrivenScheduler:
             return raw_content
 
     def generate_bug_document(self, decision: SchedulingDecision) -> Optional[str]:
-        """生成BUG详细文档，使用QA原始消息，返回文档路径"""
+        """生成BUG详细文档，使用QA原始消息，返回文档路径
+
+        去重规则：如果相同TC编号的BUG报告已存在，更新而非新建
+        """
         if not decision.extracted_issues:
             return None
 
@@ -1323,7 +1421,65 @@ class ClaudeDrivenScheduler:
         bug_dir = PROJECT_DIR / "data" / "bugs"
         bug_dir.mkdir(parents=True, exist_ok=True)
 
-        # 生成文档名（使用时间戳）
+        # 提取TC编号用于去重
+        import re
+        tc_numbers = set()
+        for issue in decision.extracted_issues:
+            matches = re.findall(r'(TC-[A-Z]+-\d+)', issue, re.IGNORECASE)
+            tc_numbers.update(matches)
+
+        # 检查是否已存在相同TC编号的BUG报告
+        existing_report = None
+        if tc_numbers:
+            for existing_file in bug_dir.glob("bug_report_*.md"):
+                try:
+                    with open(existing_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        # 检查文件中是否包含相同的TC编号
+                        existing_tcs = set(re.findall(r'(TC-[A-Z]+-\d+)', content, re.IGNORECASE))
+                        if tc_numbers & existing_tcs:  # 有交集
+                            existing_report = existing_file
+                            break
+                except Exception:
+                    continue
+
+        if existing_report:
+            logger.info(f"📄 发现已有BUG报告包含相同TC编号，将更新: {existing_report}")
+            doc_file = existing_report
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 读取现有内容
+            try:
+                with open(doc_file, 'r', encoding='utf-8') as f:
+                    existing_content = f.read()
+                # 添加更新记录
+                update_section = f"""
+
+---
+
+## 🔄 更新记录 ({datetime.now().strftime("%Y-%m-%d %H:%M")})
+
+### 新增失败项
+"""
+                for issue in decision.extracted_issues:
+                    if issue not in existing_content:
+                        update_section += f"- {issue}\n"
+
+                # 添加新的原始消息
+                raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
+                if raw_content and raw_content not in existing_content:
+                    update_section += f"""
+### 最新测试报告
+{raw_content[:2000]}
+"""
+                # 追加更新内容
+                with open(doc_file, 'a', encoding='utf-8') as f:
+                    f.write(update_section)
+                logger.info(f"📄 BUG文档已更新: {doc_file}")
+                return str(doc_file)
+            except Exception as e:
+                logger.warning(f"更新现有报告失败，将创建新报告: {e}")
+
+        # 创建新BUG报告
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         doc_file = bug_dir / f"bug_report_{timestamp}.md"
 
@@ -1778,6 +1934,31 @@ data/bugs/TC-XXX_description.md
 
             if decision.target_group in notified_groups:
                 logger.info(f"  ⏭ 跳过 {decision.target_group_name} - 已在本轮通知过")
+                continue
+
+            # 检查是否重复通知相同任务
+            is_duplicate = self._is_duplicate_task_notification(decision, lookback=5)
+            if is_duplicate:
+                logger.info(f"  🔄 检测到重复任务通知，改为发送激活消息")
+                # 只发送简短激活消息，不重复完整任务详情
+                if self._send_activation_only(decision):
+                    notifications_sent += 1
+                    notified_groups.add(decision.target_group)
+                    # 记录历史（标记为激活类型）
+                    history = self.notification_history.setdefault("history", [])
+                    history.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "source_group": decision.source_group,
+                        "target_group": decision.target_group,
+                        "target_group_name": decision.target_group_name,
+                        "mention_users": decision.mention_users,
+                        "extracted_issues": decision.extracted_issues[:5],
+                        "message_content": "[激活消息] " + decision.message_content[:150],
+                        "reason": "[重复任务] " + decision.reasoning[:80]
+                    })
+                    if len(history) > 20:
+                        self.notification_history["history"] = history[-20:]
+                    self._save_notification_history()
                 continue
 
             # 获取来源群原始消息
