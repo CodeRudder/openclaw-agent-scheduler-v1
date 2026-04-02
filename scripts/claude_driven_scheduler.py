@@ -1857,28 +1857,53 @@ data/bugs/TC-XXX_description.md
             # 获取原始消息内容（优先使用API直接获取的完整消息）
             raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
 
-            # 构建简洁的富文本消息（减少重复内容）
+            # 构建完整的富文本消息
             content_lines = [
-                [{"tag": "text", "text": f"【调度】{decision.target_group_name} → @{', '.join(decision.mention_users)}", "style": ["bold"]}],
-                [{"tag": "text", "text": decision.message_content[:200] if decision.message_content else ""}],
+                # 标题：目标和对象
+                [{"tag": "text", "text": f"🎯 目标群: {decision.target_group_name}", "style": ["bold"]}],
+                [{"tag": "text", "text": f"👤 通知对象: @{', '.join(decision.mention_users)}"}],
+                [{"tag": "text", "text": ""}],
+                # 调度指令内容
+                [{"tag": "text", "text": "📋 调度指令:", "style": ["bold"]}],
+                [{"tag": "text", "text": decision.message_content[:300] if decision.message_content else ""}],
             ]
 
-            # 只在有重要细节时才添加原始消息（缩短长度，避免重复）
+            # 原始消息详情（如果有重要细节）
             if raw_content and len(raw_content) > 50:
-                # 检查是否与message_content高度重复
                 msg_lower = (decision.message_content or "").lower()[:100]
                 raw_lower = raw_content.lower()[:100]
                 if msg_lower not in raw_lower and raw_lower not in msg_lower:
-                    content_lines.append([{"tag": "text", "text": f"详情: {raw_content[:300]}...", "style": ["italic"]}])
+                    content_lines.append([{"tag": "text", "text": ""}])
+                    content_lines.append([{"tag": "text", "text": "📝 原始消息:", "style": ["bold"] }])
+                    content_lines.append([{"tag": "text", "text": raw_content[:400] + "..." if len(raw_content) > 400 else raw_content}])
 
-            # 问题摘要（精简为一行）
+            # 问题摘要
             if decision.extracted_issues:
-                issues_text = " | ".join([i[:40] for i in decision.extracted_issues[:3]])
-                content_lines.append([{"tag": "text", "text": f"问题: {issues_text}"}])
+                content_lines.append([{"tag": "text", "text": ""}])
+                content_lines.append([{"tag": "text", "text": "⚠️ 问题摘要:", "style": ["bold"] }])
+                for issue in decision.extracted_issues[:3]:
+                    content_lines.append([{"tag": "text", "text": f"• {issue[:80]}"}])
+
+            # 当前工作计划及进度
+            if self.scheduling_plan and self.scheduling_plan.get("milestones"):
+                content_lines.append([{"tag": "text", "text": ""}])
+                content_lines.append([{"tag": "text", "text": f"📊 当前进度 (V{self.scheduling_plan.get('current_version', '?')}):", "style": ["bold"] }])
+                for m in self.scheduling_plan.get("milestones", [])[:4]:
+                    status_icon = {"completed": "✅", "in_progress": "🔄", "blocked": "🚧", "pending": "⏳"}.get(m.get("status", ""), "•")
+                    progress = m.get("progress", "")[:60]
+                    content_lines.append([{"tag": "text", "text": f"{status_icon} {m.get('name', '?')}: {progress}"}])
+
+                # 下一步计划
+                next_actions = self.scheduling_plan.get("next_actions", [])
+                if next_actions:
+                    content_lines.append([{"tag": "text", "text": ""}])
+                    content_lines.append([{"tag": "text", "text": "📌 下一步计划:", "style": ["bold"] }])
+                    for action in next_actions[:3]:
+                        content_lines.append([{"tag": "text", "text": f"→ {action[:80]}"}])
 
             rich_text = {
                 "zh_cn": {
-                    "title": "调度通知",
+                    "title": "智能调度通知",
                     "content": content_lines
                 }
             }
