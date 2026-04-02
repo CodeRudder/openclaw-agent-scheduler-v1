@@ -1877,9 +1877,8 @@ data/bugs/TC-XXX_description.md
             all_session_status[group_id] = session_status
 
             # 打印群分隔线和agent会话状态
-            logger.info(f"\n{'─' * 50}")
-            logger.info(f"📁 {group_name} ({group_id})")
             logger.info(f"{'─' * 50}")
+            logger.info(f"📁 {group_name} ({group_id})")
 
             agents = session_status.get("agents", [])
             if agents:
