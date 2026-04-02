@@ -7,110 +7,98 @@
       "name": "V5.8版本闭环",
       "status": "completed",
       "progress": "QA验收通过，产品确认，完整版本部署成功，已于2026-04-02正式闭环",
-      "assigned_to": "all",
-      "updated_at": "2026-04-02T00:16:00Z"
+      "updated_at": "2026-04-02"
     },
     {
       "id": "M2",
       "name": "V5.9 PRD文档编写",
       "status": "completed",
       "progress": "PRD文档已完成（9.4KB），功能范围确认",
-      "assigned_to": "product",
-      "updated_at": "2026-04-01T20:43:00Z"
+      "updated_at": "2026-04-01"
     },
     {
       "id": "M3",
       "name": "V5.9技术方案评审",
       "status": "completed",
       "progress": "架构师技术评审已通过，技术方案已就绪（40KB）",
-      "assigned_to": "architect",
-      "updated_at": "2026-04-01T21:00:00Z"
+      "updated_at": "2026-04-01"
     },
     {
       "id": "M4",
       "name": "V5.9 UI设计",
       "status": "completed",
       "progress": "P1+P2功能原型设计全部完成（8个页面，36稿设计稿）",
-      "assigned_to": "ui-designer",
-      "updated_at": "2026-04-02T01:09:00Z"
+      "updated_at": "2026-04-02"
     },
     {
       "id": "M4.5",
       "name": "全系统集成测试脚本编写",
       "status": "completed",
       "progress": "52/52测试脚本100%完成，10个功能模块全覆盖",
-      "assigned_to": "qa",
-      "updated_at": "2026-04-01T22:00:00Z"
+      "updated_at": "2026-04-01"
     },
     {
       "id": "M4.6",
       "name": "V5.9 UI设计评审会议",
       "status": "completed",
       "progress": "UI设计评审会议已于2026-04-02上午圆满完成，原型设计展示通过、技术可行性评估100%通过",
-      "assigned_to": "product",
-      "updated_at": "2026-04-02T02:08:00Z"
+      "updated_at": "2026-04-02"
     },
     {
       "id": "M4.7",
       "name": "V5.9高保真设计稿",
       "status": "completed",
       "progress": "高保真视觉设计工作已全部完成（5个核心文档130KB）",
-      "assigned_to": "ui-designer",
-      "updated_at": "2026-04-02T03:13:00Z"
+      "updated_at": "2026-04-02"
     },
     {
       "id": "M4.8",
       "name": "V5.9开发环境准备",
       "status": "completed",
       "progress": "fullstack-dev已完成文档熟悉、数据库迁移（19表）、依赖安装、前后端服务启动，环境100%就绪",
-      "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T14:26:00Z"
+      "updated_at": "2026-04-01"
     },
     {
       "id": "M4.9",
       "name": "集成测试脚本验证",
       "status": "completed",
       "progress": "5/5子步骤完成：测试脚本验证执行完成（145用例25通过/120失败），BUG报告已生成（11个），待开发功能清单已生成（28个失败用例详情）。失败原因是V5.9功能未实现，已记录待开发清单供开发参考",
-      "assigned_to": "qa",
-      "updated_at": "2026-04-02T14:21:00Z"
+      "updated_at": "2026-04-02"
     },
     {
       "id": "M4.10",
       "name": "V5.9开发准备（Day 1-4）",
       "status": "completed",
       "progress": "Day 1-4准备工作已100%完成",
-      "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T14:26:00Z"
+      "updated_at": "2026-04-01"
     },
     {
       "id": "M5.1",
       "name": "V5.9 Webhook模块开发",
       "status": "completed",
       "progress": "Webhook模块开发100%完成：6个核心API全部通过，代码已提交（commit fc3aaeb，18个文件855行）",
-      "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T15:39:00Z"
+      "updated_at": "2026-04-02"
     },
     {
       "id": "M5.2",
       "name": "V5.9自定义角色权限功能开发",
       "status": "in_progress",
-      "progress": "Webhook模块已完成，正在启动角色权限功能开发（7个API）",
+      "progress": "RoleModule已加载成功，8个核心文件已创建，role.controller.ts编辑失败待修复，会话已停止需要恢复",
       "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T15:40:00Z"
+      "updated_at": "2026-04-02"
     },
     {
       "id": "M6",
       "name": "V5.9测试验收",
       "status": "pending",
       "progress": "待开发完成后启动，已有145个测试用例脚本就绪",
-      "assigned_to": "qa",
-      "updated_at": "2026-04-02T14:21:00Z"
+      "updated_at": "2026-04-02"
     }
   ],
   "next_actions": [
-    "fullstack-dev立即开始自定义角色权限功能开发（feature/v5.9-role-permission分支，7个API）",
-    "完成角色权限功能后继续开发V5.9其他P1功能（高级报表分析、开放API接口）",
+    "fullstack-dev恢复会话，继续完成角色权限功能开发（修复role.controller.ts，验证7个API）",
+    "角色权限功能完成后，继续开发V5.9其他P1功能（高级报表分析、开放API接口）",
     "所有P1功能开发完成后，QA执行全量回归测试（145个测试用例）"
   ],
-  "last_updated": "2026-04-02T15:50:58.999695"
+  "last_updated": "2026-04-02T16:00:55.899992"
 }

@@ -1214,16 +1214,7 @@ class ClaudeDrivenScheduler:
         self._save_notification_history()
 
     def _is_session_actively_updating(self, group_id: str, agent_name: str, current_activity: datetime) -> bool:
-        """检查会话是否在持续更新（活动时间有变化）
-
-        Args:
-            group_id: 群组ID
-            agent_name: Agent名称
-            current_activity: 当前会话活动时间
-
-        Returns:
-            True表示会话在持续更新，False表示停滞
-        """
+        """检查会话是否在持续更新（活动时间有变化）"""
         attempts = self.notification_history.get("activation_attempts", {})
         key = f"{group_id}:{agent_name}"
         record = attempts.get(key, {})
@@ -1236,12 +1227,35 @@ class ClaudeDrivenScheduler:
             return False
 
         try:
-            # 比较活动时间是否有变化
             current_str = current_activity.isoformat()
-            # 如果活动时间有变化，说明会话在更新
             return current_str != last_recorded
         except Exception:
             return False
+
+    def _is_agent_session_active(self, group_id: str, agent_name: str, all_session_status: Dict) -> bool:
+        """检查agent会话是否活跃（基于stopReason和活动时间）
+
+        活跃判定：stopReason不是stop/aborted/error，或最近3分钟内有活动
+        """
+        session_status = all_session_status.get(group_id, {})
+        agents = session_status.get("agents", [])
+
+        for agent in agents:
+            if agent.get("name") == agent_name:
+                stop_reason = agent.get("stop_reason")
+                minutes_ago = agent.get("minutes_ago", 999)
+
+                # stopReason为空或endTurn/toolUse → 会话进行中
+                if stop_reason in (None, "", "endTurn", "toolUse"):
+                    return True
+
+                # 最近3分钟有活动 → 活跃
+                if minutes_ago < 3:
+                    return True
+
+                return False
+
+        return False
 
     def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
                            all_session_status: Dict[str, Dict],
@@ -2004,6 +2018,13 @@ data/bugs/TC-XXX_description.md
             if decision.target_group in notified_groups:
                 logger.info(f"  ⏭ 跳过 {decision.target_group_name} - 已在本轮通知过")
                 continue
+
+            # 检查目标agent会话是否活跃，活跃则跳过通知
+            if decision.mention_users:
+                first_agent = decision.mention_users[0].lstrip('@')
+                if self._is_agent_session_active(decision.target_group, first_agent, all_session_status):
+                    logger.info(f"  ✅ {first_agent} 会话活跃，跳过通知")
+                    continue
 
             # 检查是否重复通知相同任务
             is_duplicate = self._is_duplicate_task_notification(decision, lookback=5)
