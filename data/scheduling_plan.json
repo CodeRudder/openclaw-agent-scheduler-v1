@@ -1,36 +1,36 @@
 {
   "current_version": "V5.9",
-  "overall_status": "blocked",
+  "overall_status": "in_progress",
   "milestones": [
     {
       "id": "M1",
-      "name": "V5.9测试失败修复",
-      "status": "blocked",
-      "progress": "V5.9版本测试有大量失败用例，必须修复完成后才能启动V5.10。禁止跳过当前版本！",
+      "name": "V5.9失败用例修复",
+      "status": "in_progress",
+      "progress": "开发正在修复Task模块P0级BUG（添加projectId字段），剩余107个失败用例待修复。当前通过率26.2%，目标≥85%",
       "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T20:55:00"
+      "updated_at": "2026-04-02T20:57:00"
     },
     {
       "id": "M2",
       "name": "V5.9回归验证",
       "status": "pending",
-      "progress": "等待BUG修复完成后执行全量回归测试，必须100%通过才能闭环",
+      "progress": "等待BUG修复完成后执行全量回归测试，必须达到85%通过率",
       "assigned_to": "qa",
-      "updated_at": "2026-04-02T20:55:00"
+      "updated_at": "2026-04-02T20:57:00"
     },
     {
       "id": "M3",
       "name": "V5.10需求规划",
-      "status": "pending",
-      "progress": "⚠️ 被阻塞：必须等V5.9测试100%通过后才能启动",
-      "assigned_to": "product,qa,architect",
-      "updated_at": "2026-04-02T20:55:00"
+      "status": "blocked",
+      "progress": "⚠️ 已暂停！必须等V5.9测试通过率≥85%后才能启动",
+      "assigned_to": "product",
+      "updated_at": "2026-04-02T20:57:00"
     }
   ],
   "next_actions": [
-    "fullstack-dev立即修复V5.9测试失败的用例",
-    "QA输出完整的失败用例清单和BUG报告",
-    "V5.9修复完成并通过回归测试后，才能启动V5.10"
+    "fullstack-dev继续修复V5.9 P0级BUG（Task模块projectId字段）",
+    "修复完成后通知ops部署新版本",
+    "QA执行第13轮全量回归测试，验证修复效果"
   ],
-  "last_updated": "2026-04-02T20:55:00.000000"
+  "last_updated": "2026-04-02T21:00:32.661376"
 }

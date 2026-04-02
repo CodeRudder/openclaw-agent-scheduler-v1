@@ -1563,7 +1563,8 @@ class ClaudeDrivenScheduler:
     def generate_bug_document(self, decision: SchedulingDecision) -> Optional[str]:
         """生成BUG详细文档，使用QA原始消息，返回文档路径
 
-        去重规则：如果相同TC编号的BUG报告已存在，更新而非新建
+        去重规则：如果相同版本+agent+TC编号的BUG报告已存在，更新而非新建
+        文档命名：bug_report_{版本}_{agent}_{时间戳}.md
         """
         if not decision.extracted_issues:
             return None
@@ -1572,6 +1573,11 @@ class ClaudeDrivenScheduler:
         bug_dir = PROJECT_DIR / "data" / "bugs"
         bug_dir.mkdir(parents=True, exist_ok=True)
 
+        # 获取版本号和agent名称
+        version = self.scheduling_plan.get("current_version", "unknown")
+        reporter = decision.mention_users[0] if decision.mention_users else "unknown"
+        reporter = reporter.lstrip('@')
+
         # 提取TC编号用于去重
         import re
         tc_numbers = set()
@@ -1579,25 +1585,30 @@ class ClaudeDrivenScheduler:
             matches = re.findall(r'(TC-[A-Z]+-\d+)', issue, re.IGNORECASE)
             tc_numbers.update(matches)
 
-        # 检查是否已存在相同TC编号的BUG报告
+        # 检查是否已存在相同版本+agent的BUG报告
         existing_report = None
-        if tc_numbers:
-            for existing_file in bug_dir.glob("bug_report_*.md"):
-                try:
-                    with open(existing_file, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        # 检查文件中是否包含相同的TC编号
-                        existing_tcs = set(re.findall(r'(TC-[A-Z]+-\d+)', content, re.IGNORECASE))
-                        if tc_numbers & existing_tcs:  # 有交集
-                            existing_report = existing_file
-                            break
-                except Exception:
-                    continue
+        pattern_prefix = f"bug_report_{version}_{reporter}_"
+        for existing_file in bug_dir.glob(f"{pattern_prefix}*.md"):
+            try:
+                with open(existing_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    # 检查文件中是否包含相同的TC编号
+                    existing_tcs = set(re.findall(r'(TC-[A-Z]+-\d+)', content, re.IGNORECASE))
+                    if tc_numbers & existing_tcs:  # 有交集
+                        existing_report = existing_file
+                        break
+                    # 或者TC编号为空但有相同的问题摘要
+                    if not tc_numbers and not existing_tcs:
+                        for issue in decision.extracted_issues:
+                            if issue[:50] in content:
+                                existing_report = existing_file
+                                break
+            except Exception:
+                continue
 
         if existing_report:
-            logger.info(f"📄 发现已有BUG报告包含相同TC编号，将更新: {existing_report}")
+            logger.info(f"📄 发现已有BUG报告包含相同问题，将更新: {existing_report.name}")
             doc_file = existing_report
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             # 读取现有内容
             try:
                 with open(doc_file, 'r', encoding='utf-8') as f:
@@ -1611,13 +1622,19 @@ class ClaudeDrivenScheduler:
 
 ### 新增失败项
 """
+                new_issues_added = False
                 for issue in decision.extracted_issues:
                     if issue not in existing_content:
                         update_section += f"- {issue}\n"
+                        new_issues_added = True
+
+                if not new_issues_added:
+                    logger.info(f"  所有失败项已存在于报告中，跳过更新")
+                    return str(doc_file)
 
                 # 添加新的原始消息
                 raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
-                if raw_content and raw_content not in existing_content:
+                if raw_content and raw_content[:500] not in existing_content:
                     update_section += f"""
 ### 最新测试报告
 {raw_content[:2000]}
@@ -1630,16 +1647,19 @@ class ClaudeDrivenScheduler:
             except Exception as e:
                 logger.warning(f"更新现有报告失败，将创建新报告: {e}")
 
-        # 创建新BUG报告
+        # 创建新BUG报告 - 使用版本+agent+时间戳命名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        doc_file = bug_dir / f"bug_report_{timestamp}.md"
+        doc_file = bug_dir / f"bug_report_{version}_{reporter}_{timestamp}.md"
 
         # 构建文档内容 - 使用QA原始消息
-        content = f"""# 🐛 BUG报告 - {datetime.now().strftime("%Y-%m-%d %H:%M")}
+        content = f"""# 🐛 BUG报告 - {version}
 
 ## 📋 基本信息
+- **版本**: {version}
+- **报告人**: {reporter}
 - **来源群**: {decision.source_group or '未知'}
 - **目标群**: {decision.target_group_name or '未知'}
+- **时间**: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 - **优先级**: P0（需要立即处理）
 
 ## ❌ 失败项摘要
@@ -1676,7 +1696,7 @@ class ClaudeDrivenScheduler:
         try:
             with open(doc_file, 'w', encoding='utf-8') as f:
                 f.write(content)
-            logger.info(f"📄 BUG文档已生成: {doc_file}")
+            logger.info(f"📄 BUG文档已生成: {doc_file.name}")
             return str(doc_file)  # 返回全路径
         except Exception as e:
             logger.error(f"生成BUG文档失败: {e}")
