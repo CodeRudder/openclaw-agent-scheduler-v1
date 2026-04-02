@@ -1232,10 +1232,22 @@ class ClaudeDrivenScheduler:
         except Exception:
             return False
 
-    def _is_agent_session_active(self, group_id: str, agent_name: str, all_session_status: Dict) -> bool:
-        """检查agent会话是否活跃（基于stopReason和活动时间）
+    def _is_agent_session_inactive(self, group_id: str, agent_name: str, all_session_status: Dict,
+                                      timeout_minutes: int = 5) -> bool:
+        """检查agent会话是否非活跃（需要激活/通知）
 
-        活跃判定：stopReason不是stop/aborted/error，或最近3分钟内有活动
+        非活跃条件（满足任一即可）：
+        1. 会话活动超时（minutes_ago > timeout_minutes）
+        2. stopReason是异常停止
+
+        Args:
+            group_id: 群组ID
+            agent_name: Agent名称
+            all_session_status: 所有会话状态
+            timeout_minutes: 超时阈值（默认5分钟）
+
+        Returns:
+            True表示会话非活跃（需要激活），False表示会话活跃（无需处理）
         """
         session_status = all_session_status.get(group_id, {})
         agents = session_status.get("agents", [])
@@ -1245,16 +1257,16 @@ class ClaudeDrivenScheduler:
                 stop_reason = agent.get("stop_reason")
                 minutes_ago = agent.get("minutes_ago", 999)
 
-                # stopReason为空或endTurn/toolUse → 会话进行中
-                if stop_reason in (None, "", "endTurn", "toolUse"):
-                    return True
+                # 条件1：会话活动超时
+                is_timeout = minutes_ago > timeout_minutes
 
-                # 最近3分钟有活动 → 活跃
-                if minutes_ago < 3:
-                    return True
+                # 条件2：stopReason是异常停止
+                is_stopped = stop_reason in ("stop", "aborted", "error")
 
-                return False
+                # 满足任一条件就算非活跃
+                return is_timeout or is_stopped
 
+        # 找不到agent记录，保守认为活跃（不激活）
         return False
 
     def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
@@ -2019,10 +2031,10 @@ data/bugs/TC-XXX_description.md
                 logger.info(f"  ⏭ 跳过 {decision.target_group_name} - 已在本轮通知过")
                 continue
 
-            # 检查目标agent会话是否活跃，活跃则跳过通知
+            # 检查目标agent会话是否非活跃，活跃则跳过通知
             if decision.mention_users:
                 first_agent = decision.mention_users[0].lstrip('@')
-                if self._is_agent_session_active(decision.target_group, first_agent, all_session_status):
+                if not self._is_agent_session_inactive(decision.target_group, first_agent, all_session_status):
                     logger.info(f"  ✅ {first_agent} 会话活跃，跳过通知")
                     continue
 
