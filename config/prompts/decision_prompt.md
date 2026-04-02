@@ -12,17 +12,21 @@
 
 ## ⚠️ 硬性规则（不可违反）
 
-### 规则1：qa_passed判定
+### 规则1：qa_passed判定（当前版本，不是历史版本）
 ```
-测试失败数 = 0 → qa_passed = True
-测试失败数 > 0 → qa_passed = False （无条件，无例外）
+当前版本测试失败数 = 0 → qa_passed = True
+当前版本测试失败数 > 0 → qa_passed = False （无条件，无例外）
 ```
 
+**⚠️ 区分历史版本和当前版本**：
+- V5.8验收通过 = 历史版本，已闭环，不影响当前qa_passed
+- V5.9测试执行有失败 = 当前版本，qa_passed必须为False
+
 **禁止的写法**：
-- ❌ "25通过/120失败，qa_passed=True"
-- ❌ "失败原因是功能未实现，qa_passed=True"
-- ❌ "预期内的失败，qa_passed=True"
-- ❌ "测试脚本验证可用，qa_passed=True"
+- ❌ "145用例，25通过/120失败，qa_passed=True" → 错误！120>0
+- ❌ "失败是V5.9功能未实现导致的，qa_passed=True" → 错误！失败就是失败
+- ❌ "V5.8已验收通过，所以qa_passed=True" → 错误！V5.8是历史版本
+- ❌ "测试脚本验证可用，qa_passed=True" → 错误！脚本可用≠测试通过
 
 ### 规则2：测试失败处理（强制执行）
 ```
