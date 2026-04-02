@@ -1617,9 +1617,22 @@ data/bugs/TC-XXX_description.md
                     content = msg.content.lower()
                     # 检测测试失败模式
                     if any(p in content for p in ["用例", "测试", "通过", "失败", "fail", "pass"]):
-                        # 匹配 "X用例，Y通过/Z失败" 模式
+                        # 匹配多种测试结果格式
                         import re
+                        # 格式1: "X用例，Y通过/Z失败"
                         match = re.search(r'(\d+)\s*用例.*?(\d+)\s*通过.*?(\d+)\s*失败', msg.content, re.IGNORECASE)
+                        if not match:
+                            # 格式2: "X用例，Y通过，Z失败"
+                            match = re.search(r'(\d+)\s*用例[^\d]*(\d+)\s*通过[^\d]*(\d+)\s*失败', msg.content, re.IGNORECASE)
+                        if not match:
+                            # 格式3: "X/X用例，Y通过/Z失败" 或 "Y通过/Z失败"
+                            match = re.search(r'(\d+)\s*通过[/／]\s*(\d+)\s*失败', msg.content, re.IGNORECASE)
+                            if match:
+                                # 这种格式没有总数，通过+失败=总数
+                                passed = int(match.group(1))
+                                failed = int(match.group(2))
+                                total = passed + failed
+                                match = type('obj', (object,), {'group': lambda self, i: [total, passed, failed][i]})()
                         if match:
                             total = int(match.group(1))
                             passed = int(match.group(2))
