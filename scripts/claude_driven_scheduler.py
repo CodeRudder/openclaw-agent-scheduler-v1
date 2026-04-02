@@ -2088,6 +2088,7 @@ data/bugs/TC-XXX_description.md
 
         all_group_messages = {}
         all_session_status = {}
+        quick_session_status = {}  # 初始化，避免未定义错误
         total_msgs = 0
         updated_plan = self.scheduling_plan
         decisions = None
