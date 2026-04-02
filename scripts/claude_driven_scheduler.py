@@ -1606,6 +1606,65 @@ data/bugs/TC-XXX_description.md
             for a in updated_plan.get("next_actions", []):
                 logger.info(f"    → {a}")
 
+        # ========== 第二步半：检查测试失败但AI未触发通知的情况 ==========
+        # 绕过AI判定，直接从消息中检测测试失败
+        if analysis and analysis.get("version_status", {}).get("qa_passed", True):
+            # 扫描所有群消息，查找测试失败记录
+            test_failure_detected = False
+            failure_details = []
+            for group_id, messages in all_group_messages.items():
+                for msg in messages:
+                    content = msg.content.lower()
+                    # 检测测试失败模式
+                    if any(p in content for p in ["用例", "测试", "通过", "失败", "fail", "pass"]):
+                        # 匹配 "X用例，Y通过/Z失败" 模式
+                        import re
+                        match = re.search(r'(\d+)\s*用例.*?(\d+)\s*通过.*?(\d+)\s*失败', msg.content, re.IGNORECASE)
+                        if match:
+                            total = int(match.group(1))
+                            passed = int(match.group(2))
+                            failed = int(match.group(3))
+                            if failed > 0:
+                                test_failure_detected = True
+                                failure_details.append({
+                                    "group": GROUPS.get(group_id, {}).get("name", group_id),
+                                    "sender": msg.sender,
+                                    "total": total,
+                                    "passed": passed,
+                                    "failed": failed,
+                                    "content": msg.content[:200]
+                                })
+
+            # 如果检测到测试失败但AI说qa_passed=True，强制添加通知
+            if test_failure_detected and analysis.get("version_status", {}).get("qa_passed", True):
+                logger.warning(f"⚠️ 检测到测试失败但AI判定qa_passed=True，强制添加通知")
+                for detail in failure_details:
+                    logger.warning(f"  - {detail['group']}: {detail['passed']}/{detail['total']}通过, {detail['failed']}失败")
+
+                # 强制添加decision通知QA输出失败详情
+                from dataclasses import dataclass
+                forced_decision = SchedulingDecision(
+                    action="notify",
+                    target_group="qa-acceptance-group",
+                    target_group_name="验收测试群",
+                    mention_users=["qa"],
+                    extracted_issues=[f"测试失败{sum(d['failed'] for d in failure_details)}个用例"],
+                    message_content=f"## ⚠️ 测试失败详情报告要求\n\n检测到测试执行有失败用例：\n" + "\n".join([
+                        f"- {d['group']}: {d['passed']}/{d['total']}通过, {d['failed']}失败"
+                        for d in failure_details
+                    ]) + "\n\n请输出：\n1. 失败用例列表（TC编号）\n2. 失败原因（功能BUG/功能未实现）\n3. 如果是功能未实现，输出待开发功能清单",
+                    reasoning="检测到测试失败但qa_passed被设为True，强制要求输出失败详情",
+                    source_group="system-check",
+                    raw_messages="",
+                    qa_raw_messages="",
+                    bug_doc_complete=True
+                )
+                decisions.append(forced_decision)
+                # 强制设置qa_passed=False
+                if "version_status" in analysis:
+                    analysis["version_status"]["qa_passed"] = False
+                    logger.info("  ✅ 已强制设置 qa_passed=False")
+
         # ========== 第二步半：处理阻塞任务（AI识别 → 脚本验证超时 → 激活） ==========
         blocking_tasks = analysis.get("blocking_tasks", []) if analysis else []
         logger.info(f"\n🔍 处理阻塞任务...")
