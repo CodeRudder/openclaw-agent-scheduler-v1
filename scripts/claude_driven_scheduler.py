@@ -2020,6 +2020,8 @@ data/bugs/TC-XXX_description.md
                             status_icon = f"🔴 {stop_reason}"
                         elif stop_reason in ("endTurn", "toolUse"):
                             status_icon = "🔄 活跃"
+                        elif stop_reason == "stop":
+                            status_icon = "⏹ 已停止"
                         else:
                             status_icon = "✅ 正常"
 
@@ -2158,7 +2160,9 @@ data/bugs/TC-XXX_description.md
 
                             if is_timeout:
                                 status_icon = "⚠️ 超时"
-                            elif stop_reason in ("stop", "aborted", "error"):
+                            elif stop_reason == "stop":
+                                status_icon = "⏹ 已停止"
+                            elif stop_reason in ("aborted", "error"):
                                 status_icon = f"🔴 {stop_reason}"
                             elif stop_reason in ("endTurn", "toolUse"):
                                 status_icon = "🔄 活跃"
