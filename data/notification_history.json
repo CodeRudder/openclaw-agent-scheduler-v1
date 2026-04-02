@@ -1,18 +1,6 @@
 {
   "history": [
     {
-      "timestamp": "2026-04-02T16:26:16.005262",
-      "source_group": "dev-working-group",
-      "target_group": "qa-acceptance-group",
-      "target_group_name": "验收测试群",
-      "mention_users": [
-        "qa"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 🔄 V5.9 P1功能开发完成 - 请执行全量回归测试\n\n### ✅ 已完成功能（共17个API端点）\n1. **Webhook模块** - 6/6 API通过（100%）\n   - 分支：feature/v5.9-webhook\n   - 提交：fc3aaeb, f0762ed\n\n2. **角色权限模块** - 8/8 API通过（100%）\n   - 分支：feature/v5.9-ro",
-      "reason": "V5.9 P1功能（Webhook、角色权限、高级报表）已全部开发完成，共17个API端点。此前集成测试120个失败用例是因为功能未实现，现在功能已开发完成，需要QA执行全量回归测试验证功能正确性。"
-    },
-    {
       "timestamp": "2026-04-02T16:31:14.396427",
       "source_group": "ops-release-group",
       "target_group": "qa-acceptance-group",
@@ -271,6 +259,18 @@
       "extracted_issues": [],
       "message_content": "## 📋 请继续更新测试脚本并执行第5轮测试\n\n### 当前进度（第4轮）\n- 通过：30/145（20.7%）\n- 失败：115个（79.3%）\n- 已更新：3个测试文件\n\n### 待更新文件清单\n**Webhook模块**（4个）：\n- delete-webhook.test.js\n- list-webhooks.test.js\n- test-webhook.test.js\n- get-web",
       "reason": "QA会话因API速率限制中断，需要通知其恢复工作继续更新测试脚本。第4轮测试显示通过率仅20.7%，主要原因是测试脚本缺少必填字段，需要继续修复。"
+    },
+    {
+      "timestamp": "2026-04-02T18:26:03.687945",
+      "source_group": "claw-scheduler",
+      "target_group": "qa-acceptance-group",
+      "target_group_name": "验收测试群",
+      "mention_users": [
+        "qa"
+      ],
+      "extracted_issues": [],
+      "message_content": "## 📋 请恢复会话后继续更新测试脚本并执行第5轮测试\n\n### 当前进度（第4轮）\n- 通过：30/145（20.7%）\n- 失败：115个（79.3%）\n- 已更新：3个测试文件\n\n### 待更新文件清单\n**Webhook模块**（4个）：\n- delete-webhook.test.js\n- list-webhooks.test.js\n- get-webhook.test.js\n- tes",
+      "reason": "QA因API速率限制中断，需要通知其恢复后继续工作。当前测试通过率仅20.7%，需要继续更新测试脚本以匹配API要求"
     }
   ],
   "activation_attempts": {

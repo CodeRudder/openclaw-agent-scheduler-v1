@@ -32,7 +32,7 @@
       "status": "completed",
       "progress": "P1+P2功能原型设计全部完成（8个页面，36稿设计稿）",
       "assigned_to": "ui-designer",
-      "updated_at": "2026-04-02T01:09:00Z"
+      "updated_at": "2026-04-02T02:08:00Z"
     },
     {
       "id": "M4.5",
@@ -40,7 +40,7 @@
       "status": "completed",
       "progress": "52/52测试脚本100%完成，10个功能模块全覆盖",
       "assigned_to": "qa",
-      "updated_at": "2026-04-02T03:00:00Z"
+      "updated_at": "2026-04-02T04:00:00Z"
     },
     {
       "id": "M4.6",
@@ -64,7 +64,7 @@
       "status": "completed",
       "progress": "环境100%就绪",
       "assigned_to": "ops",
-      "updated_at": "2026-04-02T12:00:00Z"
+      "updated_at": "2026-04-02T08:00:00Z"
     },
     {
       "id": "M4.9",
@@ -88,7 +88,7 @@
       "status": "completed",
       "progress": "角色权限模块开发100%完成：8个API端点全部通过，代码已提交（commit 4878084）",
       "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T16:02:00Z"
+      "updated_at": "2026-04-02T16:11:00Z"
     },
     {
       "id": "M5.3",
@@ -128,5 +128,5 @@
     "QA完成脚本更新后执行第5轮全量回归测试（145用例），目标通过率≥85%",
     "测试通过后通知product确认验收结果，准备V5.9正式上线"
   ],
-  "last_updated": "2026-04-02T18:21:04.625515"
+  "last_updated": "2026-04-02T18:26:02.854702"
 }

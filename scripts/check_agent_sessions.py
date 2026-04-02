@@ -2,18 +2,20 @@
 """
 检查所有工作群agent的会话状态
 
-输出：
-- 会话文件路径
-- 活跃时间
-- 状态(stopReason)
-- 最后一条消息role
-- 最后一条消息内容摘要
+用法：
+  python3 scripts/check_agent_sessions.py                    # 查看所有agent状态
+  python3 scripts/check_agent_sessions.py fullstack-dev      # 查看指定agent状态和最后10条消息
+  python3 scripts/check_agent_sessions.py fullstack-dev 20   # 查看指定agent最后20条消息
 """
 
 import json
 import sys
+import argparse
 from pathlib import Path
 from datetime import datetime, timezone
+
+# Agent会话目录
+AGENTS_BASE = Path("/home/gongdewei/.openclaw/agents")
 
 # 项目根目录
 PROJECT_DIR = Path(__file__).parent.parent
@@ -142,7 +144,79 @@ def get_status_icon(stop_reason: str) -> str:
         return f"❓ {stop_reason}"
 
 
+def show_last_messages(agent_name: str, count: int = 10):
+    """显示指定agent的最后n条消息"""
+    session_files = get_session_files(agent_name)
+
+    if not session_files:
+        print(f"❌ Agent '{agent_name}' 无会话文件")
+        return
+
+    latest_file = session_files[0]
+    session_info = parse_session_file(latest_file)
+
+    print("=" * 80)
+    print(f"📋 {agent_name} 最后 {count} 条消息")
+    print(f"📄 会话文件: {latest_file}")
+    print(f"🕐 活跃: {format_time_ago(session_info['mtime'])}")
+    print(f"📌 状态: {get_status_icon(session_info.get('stop_reason'))}")
+    print("=" * 80)
+
+    messages = session_info.get("messages", [])
+    if not messages:
+        print("（无消息）")
+        return
+
+    # 取最后n条
+    last_msgs = messages[-count:] if len(messages) > count else messages
+
+    for i, msg in enumerate(last_msgs, 1):
+        role = msg.get("role", "?")
+        content = extract_content_full(msg.get("content", ""))
+        stop_reason = msg.get("stopReason")
+
+        role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "❓"
+        print(f"\n[{i}] {role_icon} {role}")
+        if stop_reason:
+            print(f"    stopReason: {stop_reason}")
+        print(f"    {content}")
+
+    print(f"\n{'=' * 80}")
+    print(f"✅ 共显示 {len(last_msgs)} 条消息（总共 {len(messages)} 条）")
+
+
+def extract_content_full(content, max_len: int = 500) -> str:
+    """提取消息内容（完整版，用于显示最后消息）"""
+    if isinstance(content, str):
+        return content[:max_len] + "..." if len(content) > max_len else content
+    elif isinstance(content, list):
+        text_parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_parts.append(item.get("text", ""))
+            elif isinstance(item, dict) and item.get("type") == "toolUse":
+                text_parts.append(f"[工具调用: {item.get('name', '?')}]")
+            elif isinstance(item, dict) and item.get("type") == "toolResult":
+                text_parts.append(f"[工具结果: {item.get('toolUseId', '?')}]")
+            elif isinstance(item, str):
+                text_parts.append(item)
+        full_text = "\n".join(text_parts)
+        return full_text[:max_len] + "..." if len(full_text) > max_len else full_text
+    return str(content)[:max_len]
+
+
 def main():
+    parser = argparse.ArgumentParser(description="检查agent会话状态")
+    parser.add_argument("agent", nargs="?", help="指定agent名称")
+    parser.add_argument("count", nargs="?", type=int, default=10, help="显示最后N条消息（默认10）")
+    args = parser.parse_args()
+
+    # 如果指定了agent，显示该agent的详细消息
+    if args.agent:
+        show_last_messages(args.agent, args.count)
+        return
+
+    # 否则显示所有agent的状态概览
     print("=" * 80)
     print(f"📊 Agent会话状态检查 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
@@ -195,6 +269,7 @@ def main():
 
     print(f"\n{'=' * 80}")
     print("✅ 检查完成")
+    print("💡 提示: 使用 'python3 scripts/check_agent_sessions.py <agent名> [数量]' 查看详细消息")
 
 
 if __name__ == "__main__":
