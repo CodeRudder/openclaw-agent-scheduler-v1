@@ -24,19 +24,31 @@
 - ❌ "预期内的失败，qa_passed=True"
 - ❌ "测试脚本验证可用，qa_passed=True"
 
-### 规则2：测试失败处理
+### 规则2：测试失败处理（强制执行）
 ```
-发现测试失败 → 必须执行：
-1. blockers += "测试失败X个用例"
-2. decisions += 通知QA输出详细BUG报告
-3. decisions += 通知开发修复
+if (qa_passed == False) {
+    // 必须在analysis.blockers中添加
+    blockers += "测试失败X个用例，需要生成BUG报告"
+
+    // 必须在decisions中添加（至少一条）
+    decisions += {
+        "action": "notify",
+        "target_group": "qa-acceptance-group",
+        "mention_users": ["qa"],
+        "message_content": "请输出测试失败用例的详细BUG报告（含TC编号、API路径、错误信息）"
+    }
+}
 ```
 
-**禁止的借口**：
+**⚠️ 禁止decisions为空**：当`qa_passed=False`时，decisions数组**不能为空**，必须包含至少一条通知。
+
+### 规则3：禁止的借口
+以下理由**不能**跳过BUG报告流程：
 - ❌ "功能还未开发"
 - ❌ "API未实现"
 - ❌ "预期行为"
 - ❌ "测试脚本验证可用"
+- ❌ "开发准备阶段"
 
 ## 版本闭环判定标准（必须同时满足）
 - ✅ 验收群：QA完成全部验收用例，**100%通过**，明确写出"验收通过"
