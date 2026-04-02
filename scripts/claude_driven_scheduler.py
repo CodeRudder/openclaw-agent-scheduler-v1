@@ -1876,9 +1876,38 @@ data/bugs/TC-XXX_description.md
             session_status = self.check_agent_session_status(group_id)
             all_session_status[group_id] = session_status
 
-            timeout_agents = [a for a in session_status.get("agents", []) if a.get("is_timeout")]
-            logger.info(f"  {group_name}: {len(messages)}条消息"
-                        + (f", ⚠️ {len(timeout_agents)}个超时" if timeout_agents else ""))
+            # 打印群分隔线和agent会话状态
+            logger.info(f"\n{'─' * 50}")
+            logger.info(f"📁 {group_name} ({group_id})")
+            logger.info(f"{'─' * 50}")
+
+            agents = session_status.get("agents", [])
+            if agents:
+                for agent in agents:
+                    agent_name = agent.get("name", "?")
+                    minutes_ago = agent.get("minutes_ago", 999)
+                    stop_reason = agent.get("stop_reason", "")
+                    is_timeout = agent.get("is_timeout", False)
+
+                    # 状态图标
+                    if is_timeout:
+                        status_icon = "⚠️ 超时"
+                    elif stop_reason in ("stop", "aborted", "error"):
+                        status_icon = f"🔴 {stop_reason}"
+                    elif stop_reason in ("endTurn", "toolUse"):
+                        status_icon = "🔄 活跃"
+                    else:
+                        status_icon = "✅ 正常"
+
+                    logger.info(f"  👤 {agent_name}: {minutes_ago}分钟前 | {status_icon}")
+            else:
+                logger.info(f"  （无agent会话）")
+
+            logger.info(f"  📬 消息: {len(messages)}条")
+
+            timeout_agents = [a for a in agents if a.get("is_timeout")]
+            if timeout_agents:
+                logger.info(f"  ⚠️ 超时agent: {len(timeout_agents)}个")
 
         total_msgs = sum(len(m) for m in all_group_messages.values())
         logger.info(f"\n📊 消息收集完成: {total_msgs}条消息, {len(GROUPS)}个群")
@@ -1937,6 +1966,9 @@ data/bugs/TC-XXX_description.md
             logger.info(f"\n  📋 调度计划更新:")
             logger.info(f"    版本: {updated_plan.get('current_version', '未知')}")
             logger.info(f"    状态: {updated_plan.get('overall_status', '未知')}")
+            last_updated = updated_plan.get("last_updated", "")
+            if last_updated:
+                logger.info(f"    最后更新: {last_updated}")
             for m in updated_plan.get("milestones", []):
                 status_icon = {"completed": "✅", "in_progress": "🔄", "blocked": "🚧", "pending": "⏳"}.get(m.get("status", ""), "•")
                 logger.info(f"    {status_icon} {m.get('id', '?')}. {m.get('name', '?')} - {m.get('progress', '-')}")
