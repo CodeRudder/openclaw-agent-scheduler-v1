@@ -1,18 +1,6 @@
 {
   "history": [
     {
-      "timestamp": "2026-04-02T21:05:45.057688",
-      "source_group": "dev-working-group",
-      "target_group": "ops-release-group",
-      "target_group_name": "运维发布群",
-      "mention_users": [
-        "ops"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 🚨 紧急：执行数据库迁移脚本\n\nfullstack-dev已完成Task模块部分BUG修复，需要执行数据库迁移才能生效。\n\n### 📋 迁移脚本\n```bash\npsql -U admin -d agent_task -f backend/migrations/add-changer-info-to-status-histories.sql\n```\n\n### ⚠️ 背景\n- V5.9失败用例",
-      "reason": "fullstack-dev已创建迁移脚本但无法直接执行，需要ops执行数据库迁移后才能继续修复工作"
-    },
-    {
       "timestamp": "2026-04-02T21:05:49.684503",
       "source_group": "plan-design-group",
       "target_group": "dev-working-group",
@@ -248,13 +236,21 @@
       "extracted_issues": [],
       "message_content": "## 🔄 恢复BUG修复任务\n\n### 当前进度\n- ✅ 已修复9/107个BUG（8.4%）\n- ✅ TypeScript编译错误已修复（945740f）\n- ✅ ADR-002规范已遵循\n\n### 立即行动\n1. 确认commit 945740f已推送\n2. 等待QA第13轮测试结果\n3. 根据测试结果继续修复：\n   - 第2批：Project模块（8个P0级BUG）\n   - 第3批：Co",
       "reason": "fullstack-dev因API速率限制会话异常终止，需要通知恢复BUG修复任务。当前已修复9个BUG，等待QA验证后继续修复剩余BUG。"
+    },
+    {
+      "timestamp": "2026-04-02T22:05:42.182172",
+      "source_group": "dev-working-group",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [],
+      "message_content": "## 🔄 恢复部署任务\n\n### 当前状态\n- ✅ TypeScript编译错误已修复（commit 945740f）\n- ✅ Task模块9个BUG已修复\n- ✅ Project模块8个BUG已修复\n- ✅ Comment模块4个BUG已修复\n\n### 立即行动\n请立即部署最新代码到TEST环境：\n1. 拉取最新代码（prepare/v5.9分支）\n2. 执行构建和部署\n3. 验证服务健康状态\n",
+      "reason": "ops因API速率限制会话中断，需要恢复部署任务。TypeScript编译错误已修复，可以继续部署。"
     }
   ],
   "activation_attempts": {
-    "plan-design-group:architect": {
-      "count": 1,
-      "last_activity": "2026-04-01T12:44:24.099000+00:00"
-    },
     "dev-working-group:fullstack-dev": {
       "last_activation_time": "2026-04-02T22:00:49.039919"
     },
