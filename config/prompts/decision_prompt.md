@@ -81,7 +81,28 @@ if (qa_passed == False) {
 
 **⚠️ 禁止decisions为空**：当`qa_passed=False`时，decisions数组**不能为空**，必须包含至少一条通知。
 
-### 规则3：禁止的借口
+### 规则4：文档路径必须使用绝对路径（强制执行）
+
+**所有输出给Agent的文档路径必须使用绝对路径**：
+```
+❌ 错误：docs/prd/V5.9_PRD.md
+❌ 错误：./config/technical/V5.9_API_Design.md
+❌ 错误：~/work/projects/xxx/test_script.sh
+
+✅ 正确：/home/gongdewei/work/projects/code-rudder/agent-task-center/docs/prd/V5.9_PRD.md
+✅ 正确：/home/gongdewei/work/projects/code-rudder/agent-task-center/config/technical/V5.9_API_Design.md
+```
+
+**通知消息中的路径格式**：
+```markdown
+请查看文档：
+- PRD文档：/home/user/projects/xxx/docs/prd/V5.9_PRD.md
+- 技术方案：/home/user/projects/xxx/config/technical/V5.9_Tech_Solution.md
+```
+
+**目的**：避免Agent因相对路径歧义而找不到文件。
+
+### 规则5：禁止的借口
 以下理由**不能**跳过BUG报告流程：
 - ❌ "功能还未开发"
 - ❌ "API未实现"

@@ -155,6 +155,9 @@ class ClaudeDrivenScheduler:
         self.notification_history = self._load_notification_history()
         self.scheduling_plan = self._load_scheduling_plan()
 
+        # 验证并修正调度计划中的错误状态
+        self._validate_and_correct_plan()
+
         # 加载提示词
         try:
             self.system_prompt = load_prompt()
@@ -238,6 +241,75 @@ class ClaudeDrivenScheduler:
             logger.info("📋 调度计划已保存")
         except Exception as e:
             logger.error(f"保存调度计划失败: {e}")
+
+    def _validate_and_correct_plan(self) -> bool:
+        """验证并修正调度计划中的错误状态
+
+        Returns:
+            bool: 是否进行了修正
+        """
+        import re
+        corrected = False
+
+        if not self.scheduling_plan or "milestones" not in self.scheduling_plan:
+            return False
+
+        for milestone in self.scheduling_plan.get("milestones", []):
+            name = milestone.get("name", "").lower()
+            progress = milestone.get("progress", "")
+            status = milestone.get("status", "")
+
+            # 只检查测试相关里程碑
+            if not any(kw in name for kw in ["测试", "验收", "集成"]):
+                continue
+
+            # 跳过非完成状态
+            if status != "completed":
+                continue
+
+            # 从progress中提取测试结果
+            # 格式1: "X用例，Y通过/Z失败"
+            match = re.search(r'(\d+)\s*用例.*?(\d+)\s*通过.*?(\d+)\s*失败', progress, re.IGNORECASE)
+            if not match:
+                # 格式2: "X/X用例通过" 或 "Y通过/Z失败"
+                match = re.search(r'(\d+)\s*通过[/／]\s*(\d+)\s*失败', progress, re.IGNORECASE)
+                if match:
+                    passed = int(match.group(1))
+                    failed = int(match.group(2))
+                else:
+                    continue
+            else:
+                passed = int(match.group(2))
+                failed = int(match.group(3))
+
+            # 如果有失败但标记为completed，修正为in_progress或blocked
+            if failed > 0 and status == "completed":
+                logger.warning(f"⚠️ 修正里程碑状态: {milestone.get('name')}")
+                logger.warning(f"   原因: 测试失败{failed}个用例但标记为completed")
+
+                # 检查是否已输出失败详情
+                has_detail = any(kw in progress for kw in ["BUG报告", "待开发清单", "BUG文档", "失败详情", "TC-"])
+
+                if "待输出" in progress or not has_detail:
+                    # 未输出详情 → in_progress
+                    new_status = "in_progress"
+                    new_progress = f"{progress} [系统修正: 测试失败{failed}个用例，待输出失败详情]"
+                else:
+                    # 已输出详情但未修复 → blocked
+                    new_status = "blocked"
+                    new_progress = f"{progress} [系统修正: 测试失败{failed}个用例，等待修复]"
+
+                milestone["status"] = new_status
+                milestone["progress"] = new_progress
+                milestone["corrected_at"] = datetime.now().isoformat()
+                corrected = True
+                logger.info(f"   ✅ 已修正为: {new_status}")
+
+        if corrected:
+            self._save_scheduling_plan()
+            logger.info("📋 调度计划修正完成")
+
+        return corrected
 
     def get_group_messages(self, channel_id: str, limit: int = MESSAGES_PER_GROUP) -> List[GroupMessage]:
         """获取群消息 - 提取群成员和claw-admin消息，每成员最后10条"""
