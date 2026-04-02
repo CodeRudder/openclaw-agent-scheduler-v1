@@ -1278,17 +1278,31 @@ class ClaudeDrivenScheduler:
         """
         """综合所有群消息，一次AI调用做出全局决策"""
 
-        # 构建所有群的消息摘要
-        groups_summary = ""
+        # 构建按时间线排序的所有消息（跨群）
+        all_messages_timeline = []
         for group_id, messages in all_group_messages.items():
             group_name = GROUPS.get(group_id, {}).get("name", group_id)
-            if not messages:
-                groups_summary += f"\n### {group_name} ({group_id})\n（无消息）\n"
-                continue
-            groups_summary += f"\n### {group_name} ({group_id})\n"
             for m in messages:
-                ts = datetime.fromtimestamp(m.timestamp).strftime('%H:%M')
-                groups_summary += f"- [{ts}] {m.sender}: {m.content[:200]}\n"
+                all_messages_timeline.append({
+                    "timestamp": m.timestamp,
+                    "group_name": group_name,
+                    "group_id": group_id,
+                    "sender": m.sender,
+                    "content": m.content
+                })
+
+        # 按时间排序（旧→新）
+        all_messages_timeline.sort(key=lambda x: x["timestamp"])
+
+        # 构建时间线摘要
+        timeline_summary = ""
+        if all_messages_timeline:
+            for m in all_messages_timeline:
+                ts = datetime.fromtimestamp(m["timestamp"]).strftime('%H:%M:%S')
+                # 格式：[时间] 【群名】 发送人: 内容
+                timeline_summary += f"- [{ts}] 【{m['group_name']}】 {m['sender']}: {m['content'][:200]}\n"
+        else:
+            timeline_summary = "（无消息）\n"
 
         # 构建会话超时信息
         session_info = ""
@@ -1352,8 +1366,8 @@ class ClaudeDrivenScheduler:
         else:
             plan_str = "暂无调度计划（首次运行或计划已清空）"
 
-        user_prompt = f"""## 所有工作群最新消息
-{groups_summary}
+        user_prompt = f"""## 所有工作群消息时间线（按时间排序，跨群）
+{timeline_summary}
 
 ## Agent会话内部消息（assistant最后2条，用于判断agent真实工作状态）
 {agent_session_messages if agent_session_messages else "无会话消息"}
