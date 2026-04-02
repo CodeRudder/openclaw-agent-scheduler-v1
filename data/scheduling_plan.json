@@ -7,7 +7,7 @@
       "name": "V5.8版本闭环",
       "status": "completed",
       "progress": "QA验收通过，产品确认，完整版本部署成功，已于2026-04-02正式闭环",
-      "assigned_to": "ops",
+      "assigned_to": "all",
       "updated_at": "2026-04-02T00:16:00Z"
     },
     {
@@ -40,7 +40,7 @@
       "status": "completed",
       "progress": "52/52测试脚本100%完成，10个功能模块全覆盖",
       "assigned_to": "qa",
-      "updated_at": "2026-04-01T18:00:00Z"
+      "updated_at": "2026-04-02T03:00:00Z"
     },
     {
       "id": "M4.6",
@@ -64,7 +64,7 @@
       "status": "completed",
       "progress": "环境100%就绪",
       "assigned_to": "ops",
-      "updated_at": "2026-04-02T08:00:00Z"
+      "updated_at": "2026-04-02T12:00:00Z"
     },
     {
       "id": "M4.9",
@@ -72,7 +72,7 @@
       "status": "completed",
       "progress": "5/5子步骤完成：测试脚本验证执行完成（145用例），BUG报告已生成，待开发功能清单已生成",
       "assigned_to": "qa",
-      "updated_at": "2026-04-02T12:00:00Z"
+      "updated_at": "2026-04-02T16:50:00Z"
     },
     {
       "id": "M5.1",
@@ -88,7 +88,7 @@
       "status": "completed",
       "progress": "角色权限模块开发100%完成：8个API端点全部通过，代码已提交（commit 4878084）",
       "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T16:11:00Z"
+      "updated_at": "2026-04-02T16:02:00Z"
     },
     {
       "id": "M5.3",
@@ -96,7 +96,7 @@
       "status": "completed",
       "progress": "高级报表模块开发100%完成：3个API端点全部通过，代码已提交（commit 23fe0d3）",
       "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T16:33:00Z"
+      "updated_at": "2026-04-02T16:24:00Z"
     },
     {
       "id": "M5.4",
@@ -112,21 +112,21 @@
       "status": "completed",
       "progress": "P1问题已全部修复：代码已合并到prepare/v5.9分支，21个API端点自测100%通过",
       "assigned_to": "fullstack-dev",
-      "updated_at": "2026-04-02T18:00:00Z"
+      "updated_at": "2026-04-02T17:59:00Z"
     },
     {
       "id": "M6",
       "name": "V5.9测试验收",
       "status": "in_progress",
-      "progress": "4/5子步骤完成：第4轮测试30/145通过（20.7%），已更新3个测试文件，需继续更新剩余文件后执行第5轮测试",
+      "progress": "4/5子步骤完成：第4轮测试30/145通过（20.7%），已更新3个测试文件，QA会话因API速率限制中断，需恢复继续更新剩余10个测试文件",
       "assigned_to": "qa",
       "updated_at": "2026-04-02T18:14:00Z"
     }
   ],
   "next_actions": [
-    "QA继续更新剩余测试脚本（Webhook 4个、Permission 6个文件），添加缺失的必填参数",
+    "QA恢复会话后继续更新剩余测试脚本（Webhook 4个、Permission 6个文件），添加缺失的必填参数（projectId等）",
     "QA完成脚本更新后执行第5轮全量回归测试（145用例），目标通过率≥85%",
     "测试通过后通知product确认验收结果，准备V5.9正式上线"
   ],
-  "last_updated": "2026-04-02T18:16:13.040339"
+  "last_updated": "2026-04-02T18:21:04.625515"
 }
