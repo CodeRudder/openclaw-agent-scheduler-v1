@@ -16,60 +16,74 @@ import requests
 import argparse
 import re
 import sys
+import os
+import yaml
 from pathlib import Path
 from datetime import datetime, timezone
 
 # 添加项目路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# 尝试导入项目配置
-try:
-    from config.groups import GROUPS as PROJECT_GROUPS
-    from config.config import MM_URL as PROJECT_MM_URL
-    from config.config import MM_TOKEN as PROJECT_MM_TOKEN
-    GROUPS = PROJECT_GROUPS
-    MM_URL = PROJECT_MM_URL
-    MM_TOKEN = PROJECT_MM_TOKEN
-except ImportError:
-    # 使用默认配置
-    pass
-
-# 项目根目录
 PROJECT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_DIR))
 
-# 激活冷却时间（秒）
-ACTIVATION_COOLDOWN = 180  # 3分钟内不重复激活
+# 加载全部配置（从groups.yaml读取）
+def load_all_config():
+    """从groups.yaml加载全部配置"""
+    config = {}
+    groups_file = PROJECT_DIR / "config" / "groups.yaml"
+    if groups_file.exists():
+        try:
+            with open(groups_file, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+        except Exception:
+            pass
+    return config
+
+# 加载配置
+ALL_CONFIG = load_all_config()
+GROUPS = ALL_CONFIG.get("groups", {})
+
+# Mattermost配置 - 从groups.yaml读取
+MM_CONFIG = ALL_CONFIG.get("mattermost", {})
+MM_URL = os.environ.get("MM_URL", MM_CONFIG.get("url", "http://localhost:8066"))
+MM_ADMIN_USER = MM_CONFIG.get("admin_user", "")
+MM_ADMIN_PASSWORD = MM_CONFIG.get("admin_password", "")
+
+# Token缓存
+_MM_TOKEN = None
+
+def get_mm_token():
+    """获取Mattermost Token（登录获取）"""
+    global _MM_TOKEN
+    if _MM_TOKEN:
+        return _MM_TOKEN
+
+    # 优先使用环境变量
+    env_token = os.environ.get("MM_TOKEN")
+    if env_token:
+        _MM_TOKEN = env_token
+        return _MM_TOKEN
+
+    # 使用用户名密码登录获取token
+    if MM_ADMIN_USER and MM_ADMIN_PASSWORD:
+        try:
+            resp = requests.post(
+                f"{MM_URL}/api/v4/users/login",
+                json={
+                    "login_id": MM_ADMIN_USER,
+                    "password": MM_ADMIN_PASSWORD
+                },
+                timeout=10
+            )
+            if resp.status_code == 200:
+                _MM_TOKEN = resp.headers.get("Token", "")
+                return _MM_TOKEN
+        except Exception as e:
+            print(f"⚠️ Mattermost登录失败: {e}")
+
+    return ""
 
 # Agent会话目录
 AGENTS_BASE = Path("/home/gongdewei/.openclaw/agents")
-
-# 群组配置
-GROUPS = {
-    "dev-working-group": {
-        "name": "开发工作群",
-        "channel_id": "9fzie6aawjgnfk6dyohf89p1wh",
-        "agents": ["fullstack-dev", "architect"]
-    },
-    "qa-acceptance-group": {
-        "name": "验收测试群",
-        "channel_id": "ms1m6pa4f7bwdqfs3k95h39z9y",
-        "agents": ["qa", "product"]
-    },
-    "ops-release-group": {
-        "name": "运维发布群",
-        "channel_id": "ct5gdky3i7f35q46xj6hy46e1c",
-        "agents": ["ops", "architect"]
-    },
-    "plan-design-group": {
-        "name": "规划设计群",
-        "channel_id": "t1a4qrggwt8bxy6ebrg5xntu1a",
-        "agents": ["product", "ui-designer", "architect", "qa"]
-    }
-}
-
-# Mattermost配置
-MM_URL = "http://localhost:8065"
-MM_TOKEN = "e7m6gsf96jnwpm951s91eu415w"
 
 # 激活冷却时间（秒）
 ACTIVATION_COOLDOWN = 180  # 3分钟内不重复激活
@@ -157,22 +171,28 @@ def get_last_message_stop_reason(file_path: Path) -> dict:
 
 
 def send_activation_message(group_id: str, agent_name: str) -> bool:
-    """发送激活消息"""
+    """发送激活消息（不@agent，避免触发通知风暴）"""
     group_config = GROUPS.get(group_id, {})
-    channel_id = group_config.get("channel_id", "")
+    channel_id = group_config.get("room_id", group_config.get("channel_id", ""))
     group_name = group_config.get("name", group_id)
 
     if not channel_id:
-        print(f"  ⚠️ 找不到群 {group_id} 的channel_id")
+        print(f"  ⚠️ 找不到群 {group_id} 的room_id")
         return False
 
-    # 简洁激活消息
+    # 获取token
+    token = get_mm_token()
+    if not token:
+        print(f"  ⚠️ 无法获取Mattermost Token")
+        return False
+
+    # 简洁激活消息（@agent触发回复）
     message = f"@{agent_name} 🔄 会话异常中断，请继续处理任务。"
 
     try:
         resp = requests.post(
             f"{MM_URL}/api/v4/posts",
-            headers={"Authorization": f"Bearer {MM_TOKEN}"},
+            headers={"Authorization": f"Bearer {token}"},
             json={
                 "channel_id": channel_id,
                 "message": message
@@ -180,7 +200,7 @@ def send_activation_message(group_id: str, agent_name: str) -> bool:
             timeout=10
         )
         resp.raise_for_status()
-        print(f"  ✅ 已发送激活消息到 {group_name} @{agent_name}")
+        print(f"  ✅ 已发送激活消息到 {group_name}")
         return True
     except Exception as e:
         print(f"  ❌ 发送激活消息失败: {e}")
@@ -224,10 +244,15 @@ def check_and_recover():
     skipped_count = 0
 
     for group_id, group_config in GROUPS.items():
-        group_name = group_config["name"]
+        group_name = group_config.get("name", group_id)
+        agents = group_config.get("agents", [])
+
+        if not agents:
+            continue
+
         print(f"\n📁 {group_name}")
 
-        for agent_name in group_config["agents"]:
+        for agent_name in agents:
             agent_key = agent_name.lower()
             session_files = get_session_files(agent_name)
 
@@ -331,10 +356,15 @@ def show_status_only():
     print(f"{'='*60}")
 
     for group_id, group_config in GROUPS.items():
-        group_name = group_config["name"]
+        group_name = group_config.get("name", group_id)
+        agents = group_config.get("agents", [])
+
+        if not agents:
+            continue
+
         print(f"\n📁 {group_name}")
 
-        for agent_name in group_config["agents"]:
+        for agent_name in agents:
             session_files = get_session_files(agent_name)
 
             if not session_files:

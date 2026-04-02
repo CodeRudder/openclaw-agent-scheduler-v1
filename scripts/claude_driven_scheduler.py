@@ -1920,65 +1920,288 @@ data/bugs/TC-XXX_description.md
             logger.error(f"飞书通知发送失败: {e}")
             return False
 
+    def _should_force_full_analysis(self) -> bool:
+        """检查是否需要强制进行完整分析（20分钟兜底机制）
+
+        Returns:
+            bool - 是否需要强制完整分析
+        """
+        # 检查上次完整分析时间
+        last_full_analysis = self.scheduling_plan.get("last_full_analysis_time")
+
+        if not last_full_analysis:
+            # 从未进行过完整分析，需要做一次
+            logger.info(f"  ⏰ 首次运行，需要完整分析建立基线")
+            return True
+
+        try:
+            last_time = datetime.fromisoformat(last_full_analysis.replace('Z', '+00:00'))
+            elapsed = (datetime.now(last_time.tzinfo) - last_time).total_seconds() / 60
+
+            if elapsed >= 20:
+                logger.info(f"  ⏰ 距上次完整分析已{int(elapsed)}分钟，强制执行完整分析")
+                return True
+        except Exception:
+            logger.info(f"  ⏰ 解析上次分析时间失败，需要完整分析")
+            return True
+
+        return False
+
+    def _get_active_task_agents(self) -> Dict[str, List[str]]:
+        """获取有处理中/阻塞任务的agent及其所在群
+
+        Returns:
+            Dict[group_id, List[agent_name]] - 有活跃任务的群及agent列表
+        """
+        active_agents_by_group = {}
+
+        if not self.scheduling_plan:
+            return active_agents_by_group
+
+        for milestone in self.scheduling_plan.get("milestones", []):
+            status = milestone.get("status", "")
+            assigned_to = milestone.get("assigned_to", "")
+
+            # 只检查处理中(in_progress)的任务，不检查阻塞(blocked)的任务
+            if status == "in_progress" and assigned_to:
+                # 找到agent所在的群
+                for group_id, group_config in GROUPS.items():
+                    agents = group_config.get("agents", [])
+                    if assigned_to in agents:
+                        if group_id not in active_agents_by_group:
+                            active_agents_by_group[group_id] = []
+                        if assigned_to not in active_agents_by_group[group_id]:
+                            active_agents_by_group[group_id].append(assigned_to)
+                        break
+
+        return active_agents_by_group
+
+    def _quick_check_active_tasks(self, active_agents_by_group: Dict[str, List[str]]) -> tuple:
+        """快速检查有活跃任务的agent
+
+        只拉取相关群的消息，进行快速决策
+
+        Returns:
+            (decisions, need_full_analysis, quick_session_status)
+        """
+        logger.info(f"\n🔍 第一阶段：快速检查活跃任务...")
+        logger.info(f"  有活跃任务的群: {list(active_agents_by_group.keys())}")
+
+        # 只收集有活跃任务的群的消息
+        quick_group_messages = {}
+        quick_session_status = {}
+
+        for group_id, active_agents in active_agents_by_group.items():
+            group_config = GROUPS.get(group_id, {})
+            group_name = group_config.get("name", group_id)
+            channel_id = group_config.get("channel_id", "")
+
+            # 拉取群消息
+            messages = self.get_group_messages(channel_id) if channel_id else []
+            quick_group_messages[group_id] = messages
+
+            # 检查agent会话状态
+            session_status = self.check_agent_session_status(group_id)
+            quick_session_status[group_id] = session_status
+
+            # 打印状态
+            logger.info(f"  📁 {group_name}: {len(messages)}条消息")
+            for agent_name in active_agents:
+                # 找到对应agent的状态
+                for agent in session_status.get("agents", []):
+                    if agent.get("name") == agent_name:
+                        minutes_ago = agent.get("minutes_ago", 999)
+                        stop_reason = agent.get("stop_reason", "")
+                        is_timeout = agent.get("is_timeout", False)
+
+                        if is_timeout:
+                            status_icon = "⚠️ 超时"
+                        elif stop_reason in ("stop", "aborted", "error"):
+                            status_icon = f"🔴 {stop_reason}"
+                        elif stop_reason in ("endTurn", "toolUse"):
+                            status_icon = "🔄 活跃"
+                        else:
+                            status_icon = "✅ 正常"
+
+                        logger.info(f"    👤 {agent_name}: {minutes_ago}分钟前 | {status_icon}")
+                        break
+
+        # 判断是否需要完整分析
+        need_full_analysis = False
+
+        # 检查是否有异常情况
+        has_timeout = False
+        has_error = False
+        for group_id, status in quick_session_status.items():
+            for agent in status.get("agents", []):
+                if agent.get("is_timeout"):
+                    has_timeout = True
+                if agent.get("stop_reason") in ("error", "aborted"):
+                    has_error = True
+
+        if has_timeout or has_error:
+            logger.info(f"  ⚠️ 发现异常: 超时={has_timeout}, 错误={has_error}")
+
+        # 检查消息数量
+        total_msgs = sum(len(m) for m in quick_group_messages.values())
+        logger.info(f"  📊 活跃任务群消息: {total_msgs}条")
+
+        # 有异常情况 或 消息足够多(>5条)，都进行快速AI决策
+        if has_timeout or has_error or total_msgs >= 5:
+            logger.info(f"\n🧠 快速分析活跃任务群消息...")
+            decisions, analysis, updated_plan = self.analyze_with_claude(
+                quick_group_messages, quick_session_status, self.notification_history,
+                self.scheduling_plan
+            )
+            # 返回决策，need_full_analysis=False（已做出决策），同时返回消息数量
+            return decisions, False, quick_session_status, total_msgs
+
+        # 消息太少，需要完整分析
+        need_full_analysis = True
+        logger.info(f"  📋 消息较少，需要完整分析")
+
+        return None, need_full_analysis, quick_session_status, 0
+
     def run(self):
-        """执行调度 - 先收集所有群消息，再综合分析决策"""
+        """执行调度 - 两阶段优化：先快速检查活跃任务，必要时再完整分析"""
         logger.info("=" * 70)
         logger.info(f"🕐 Claude驱动调度开始 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 70)
 
-        # ========== 第一步：收集所有群消息和会话状态 ==========
-        all_group_messages = {}   # group_id -> [GroupMessage]
-        all_session_status = {}   # group_id -> session_status
+        # ========== 获取有活跃任务的agent ==========
+        active_agents_by_group = self._get_active_task_agents()
 
-        for group_id, group_config in GROUPS.items():
-            group_name = group_config["name"]
-            messages = self.get_group_messages(group_config["channel_id"])
-            all_group_messages[group_id] = messages
+        if not active_agents_by_group:
+            logger.info("📋 无处理中/阻塞任务，跳过调度")
+            return
 
-            session_status = self.check_agent_session_status(group_id)
-            all_session_status[group_id] = session_status
+        # 打印活跃任务信息
+        logger.info(f"\n📋 活跃任务 (处理中/阻塞):")
+        for milestone in self.scheduling_plan.get("milestones", []):
+            if milestone.get("status") in ("in_progress", "blocked"):
+                logger.info(f"  • {milestone.get('name')}: {milestone.get('status')} → @{milestone.get('assigned_to')}")
 
-            # 打印群分隔线和agent会话状态
-            logger.info(f"{'─' * 50}")
-            logger.info(f"📁 {group_name} ({group_id})")
+        # ========== 第一阶段：快速检查活跃任务 ==========
+        quick_result = self._quick_check_active_tasks(active_agents_by_group)
+        quick_decisions, need_full_analysis, quick_session_status, quick_msg_count = quick_result
 
-            agents = session_status.get("agents", [])
-            if agents:
-                for agent in agents:
-                    agent_name = agent.get("name", "?")
-                    minutes_ago = agent.get("minutes_ago", 999)
-                    stop_reason = agent.get("stop_reason", "")
-                    is_timeout = agent.get("is_timeout", False)
+        all_group_messages = {}
+        all_session_status = {}
+        total_msgs = quick_msg_count  # 初始化为快速检查的消息数
+        updated_plan = self.scheduling_plan  # 初始化调度计划
 
-                    # 状态图标
-                    if is_timeout:
-                        status_icon = "⚠️ 超时"
-                    elif stop_reason in ("stop", "aborted", "error"):
-                        status_icon = f"🔴 {stop_reason}"
-                    elif stop_reason in ("endTurn", "toolUse"):
-                        status_icon = "🔄 活跃"
-                    else:
-                        status_icon = "✅ 正常"
+        # 判断是否需要第二阶段完整分析
+        # 优先信任第一阶段的决策：如果有决策就执行，不强制完整分析
+        need_second_phase = False
 
-                    logger.info(f"  👤 {agent_name}: {minutes_ago}分钟前 | {status_icon}")
+        if quick_decisions is None:
+            # 第一阶段未做出决策，需要完整分析
+            need_second_phase = True
+            logger.info(f"  📋 第一阶段未做出决策，需要完整分析")
+        elif not quick_decisions:
+            # 第一阶段返回空决策，可能需要完整分析
+            need_second_phase = True
+            logger.info(f"  📋 第一阶段返回空决策，需要完整分析")
+        else:
+            # 第一阶段有决策，检查是否需要20分钟兜底
+            # 注意：有决策时优先执行决策，只有决策不够时才强制完整分析
+            need_force_full = self._should_force_full_analysis()
+            if need_force_full:
+                need_second_phase = True
+
+        if quick_decisions is not None and not need_second_phase:
+            # 快速检查已做出决策，检查是否需要完整分析补充
+            decisions = quick_decisions
+
+            # 如果决策为空，可能需要完整分析
+            if not decisions:
+                need_full_analysis = True
             else:
-                logger.info(f"  （无agent会话）")
+                # 有决策，先执行，不需要完整分析
+                need_full_analysis = False
+                # 使用快速分析时的会话状态和消息
+                all_session_status = quick_session_status
+                # 复用快速分析的消息到 all_group_messages（用于后续统计）
+                all_group_messages = {}
+                for group_id in active_agents_by_group.keys():
+                    channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
+                    if channel_id:
+                        messages = self.get_group_messages(channel_id)
+                        all_group_messages[group_id] = messages
+                    else:
+                        all_group_messages[group_id] = []
+                # 重新计算 total_msgs
+                total_msgs = sum(len(m) for m in all_group_messages.values())
 
-            logger.info(f"  📬 消息: {len(messages)}条")
+        if need_second_phase:
+            # ========== 第二阶段：完整分析所有群 ==========
+            logger.info(f"\n🔍 第二阶段：完整分析所有群...")
 
-            timeout_agents = [a for a in agents if a.get("is_timeout")]
-            if timeout_agents:
-                logger.info(f"  ⚠️ 超时agent: {len(timeout_agents)}个")
+            for group_id, group_config in GROUPS.items():
+                group_name = group_config.get("name", group_id)
+                channel_id = group_config.get("channel_id", "")
 
-        total_msgs = sum(len(m) for m in all_group_messages.values())
-        logger.info(f"\n📊 消息收集完成: {total_msgs}条消息, {len(GROUPS)}个群")
+                # 如果第一阶段已拉取过，复用
+                if group_id in quick_session_status:
+                    session_status = quick_session_status[group_id]
+                    # 但消息可能需要重新拉取（如果之前没拉取）
+                    if group_id not in active_agents_by_group:
+                        messages = self.get_group_messages(channel_id) if channel_id else []
+                    else:
+                        # 已拉取过，复用（需要从quick检查中获取）
+                        messages = []  # 暂时设为空，后面统一处理
+                else:
+                    messages = self.get_group_messages(channel_id) if channel_id else []
+                    session_status = self.check_agent_session_status(group_id)
 
-        # ========== 第二步：综合分析，一次AI调用 ==========
-        logger.info(f"\n🧠 综合分析所有群消息...")
-        decisions, analysis, updated_plan = self.analyze_with_claude(
-            all_group_messages, all_session_status, self.notification_history,
-            self.scheduling_plan
-        )
+                all_group_messages[group_id] = messages
+                all_session_status[group_id] = session_status
+
+                # 打印群状态（只打印之前未打印的）
+                if group_id not in active_agents_by_group:
+                    logger.info(f"{'─' * 50}")
+                    logger.info(f"📁 {group_name} ({group_id})")
+                    agents = session_status.get("agents", [])
+                    if agents:
+                        for agent in agents:
+                            agent_name = agent.get("name", "?")
+                            minutes_ago = agent.get("minutes_ago", 999)
+                            stop_reason = agent.get("stop_reason", "")
+                            is_timeout = agent.get("is_timeout", False)
+
+                            if is_timeout:
+                                status_icon = "⚠️ 超时"
+                            elif stop_reason in ("stop", "aborted", "error"):
+                                status_icon = f"🔴 {stop_reason}"
+                            elif stop_reason in ("endTurn", "toolUse"):
+                                status_icon = "🔄 活跃"
+                            else:
+                                status_icon = "✅ 正常"
+
+                            logger.info(f"  👤 {agent_name}: {minutes_ago}分钟前 | {status_icon}")
+                    else:
+                        logger.info(f"  （无agent会话）")
+                    logger.info(f"  📬 消息: {len(messages)}条")
+
+            total_msgs = sum(len(m) for m in all_group_messages.values())
+            logger.info(f"\n📊 完整消息收集: {total_msgs}条消息, {len(GROUPS)}个群")
+
+            # 完整分析
+            logger.info(f"\n🧠 综合分析所有群消息...")
+            decisions, analysis, updated_plan = self.analyze_with_claude(
+                all_group_messages, all_session_status, self.notification_history,
+                self.scheduling_plan
+            )
+            # 更新最后完整分析时间（20分钟兜底机制）
+            if updated_plan:
+                updated_plan["last_full_analysis_time"] = datetime.now().isoformat()
+                self.scheduling_plan = updated_plan
+                self._save_scheduling_plan()
+                logger.info(f"  📝 已更新最后完整分析时间")
+        else:
+            # 使用快速分析结果
+            analysis = {}
+            updated_plan = self.scheduling_plan
 
         # 输出分析报告
         if analysis:
