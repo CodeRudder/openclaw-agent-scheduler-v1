@@ -1857,28 +1857,24 @@ data/bugs/TC-XXX_description.md
             # 获取原始消息内容（优先使用API直接获取的完整消息）
             raw_content = decision.agent_raw_message or decision.raw_messages or decision.qa_raw_messages
 
-            # 构建富文本消息
+            # 构建简洁的富文本消息（减少重复内容）
             content_lines = [
-                [{"tag": "text", "text": f"【智能调度通知】", "style": ["bold"]}],
-                [{"tag": "text", "text": f"目标: {decision.target_group_name}"}],
-                [{"tag": "text", "text": f"@对象: {', '.join(decision.mention_users)}"}],
-                [{"tag": "text", "text": ""}],
-                [{"tag": "text", "text": decision.message_content[:300] if decision.message_content else ""}],
+                [{"tag": "text", "text": f"【调度】{decision.target_group_name} → @{', '.join(decision.mention_users)}", "style": ["bold"]}],
+                [{"tag": "text", "text": decision.message_content[:200] if decision.message_content else ""}],
             ]
 
-            # 添加原始消息（包含密码、账号等细节）
-            if raw_content:
-                content_lines.append([{"tag": "text", "text": ""}])
-                content_lines.append([{"tag": "text", "text": "原始消息:", "style": ["bold"] }])
-                # 截断过长的内容
-                truncated = raw_content[:800] + "..." if len(raw_content) > 800 else raw_content
-                content_lines.append([{"tag": "text", "text": truncated}])
+            # 只在有重要细节时才添加原始消息（缩短长度，避免重复）
+            if raw_content and len(raw_content) > 50:
+                # 检查是否与message_content高度重复
+                msg_lower = (decision.message_content or "").lower()[:100]
+                raw_lower = raw_content.lower()[:100]
+                if msg_lower not in raw_lower and raw_lower not in msg_lower:
+                    content_lines.append([{"tag": "text", "text": f"详情: {raw_content[:300]}...", "style": ["italic"]}])
 
+            # 问题摘要（精简为一行）
             if decision.extracted_issues:
-                content_lines.append([{"tag": "text", "text": ""}])
-                content_lines.append([{"tag": "text", "text": "问题摘要:", "style": ["bold"] }])
-                for issue in decision.extracted_issues[:5]:  # 最多5个
-                    content_lines.append([{"tag": "text", "text": f"• {issue[:100]}"}])
+                issues_text = " | ".join([i[:40] for i in decision.extracted_issues[:3]])
+                content_lines.append([{"tag": "text", "text": f"问题: {issues_text}"}])
 
             rich_text = {
                 "zh_cn": {
