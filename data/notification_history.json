@@ -1,57 +1,6 @@
 {
   "history": [
     {
-      "timestamp": "2026-04-02T19:36:27.086737",
-      "source_group": "dev-working-group",
-      "target_group": "qa-acceptance-group",
-      "target_group_name": "验收测试群",
-      "mention_users": [
-        "qa"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 📋 请根据API文档分析113个失败用例\n\n### ✅ API文档已就绪\n- 文档路径：`/home/gongdewei/work/projects/code-rudder/agent-task-center/docs/api/V5.9_API_Document.md`\n- 文件大小：15.2KB\n- API端点：21个（100%覆盖）\n\n### 🎯 分析任务\n请根据API文档对比测试脚本，",
-      "reason": "fullstack-dev已完成V5.9完整API文档，QA需要根据文档分析失败用例的根本原因。QA会话之前因速率限制中断，需要恢复工作继续输出分析报告。"
-    },
-    {
-      "timestamp": "2026-04-02T19:41:10.716773",
-      "source_group": "qa-acceptance-group",
-      "target_group": "dev-working-group",
-      "target_group_name": "开发工作群",
-      "mention_users": [
-        "fullstack-dev"
-      ],
-      "extracted_issues": [
-        "TC-V5.9-001: Task模块API返回500服务器错误（约40个用例）",
-        "TC-V5.9-002: Auth模块错误消息语言不匹配（约10个用例）"
-      ],
-      "message_content": "## 🚨 紧急：请立即开始修复V5.9 P0和P1级BUG\n\n### 📊 BUG报告已生成\n- **汇总报告**：data/bugs/TC-V5.9-SUMMARY.md\n- **P0级BUG**：data/bugs/TC-V5.9-001_task-module-500-errors.md（约40个用例）\n- **P1级BUG**：data/bugs/TC-V5.9-002_auth-error",
-      "reason": "QA已完成BUG报告生成，开发需要立即开始修复P0和P1级BUG，修复完成后QA重新执行验收测试"
-    },
-    {
-      "timestamp": "2026-04-02T19:51:00.384661",
-      "source_group": "dev-working-group",
-      "target_group": "ops-release-group",
-      "target_group_name": "运维发布群",
-      "mention_users": [
-        "ops"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 🚀 V5.9新版本紧急部署请求\n\n### ✅ BUG修复完成\nfullstack-dev已完成P0/P1级BUG修复：\n- **P0修复**：Task模块500错误（添加project_id列，约40个用例）\n- **P1修复**：Auth模块错误消息中文化（约10个用例）\n- **代码提交**：55a8067\n\n### 📋 部署请求\n请立即部署V5.9新版本（commit 55a8067）",
-      "reason": "fullstack-dev已修复P0/P1级BUG并提交代码，需要ops部署新版本后QA才能验证修复效果"
-    },
-    {
-      "timestamp": "2026-04-02T20:06:22.721241",
-      "source_group": "ops-release-group",
-      "target_group": "qa-acceptance-group",
-      "target_group_name": "验收测试群",
-      "mention_users": [
-        "qa"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 🚀 V5.9新版本已部署 - 请立即执行第12轮验收测试\n\n### ✅ 部署确认\n- **部署版本**：V5.9 (commit 55a8067)\n- **部署时间**：2026-04-02 19:54:21\n- **修复内容**：\n  - P0修复：Task模块添加project_id列（约40个用例）\n  - P1修复：Auth模块错误消息中文化（约10个用例）\n\n### 🎯 测试目标\n",
-      "reason": "ops已完成V5.9新版本部署（包含P0/P1级BUG修复），QA需要立即执行第12轮验收测试验证修复效果。根据规则A，禁止等待，必须立即行动。"
-    },
-    {
       "timestamp": "2026-04-02T20:10:57.818888",
       "source_group": "qa-acceptance-group",
       "target_group": "dev-working-group",
@@ -257,6 +206,54 @@
       "extracted_issues": [],
       "message_content": "## 📋 V5.9回归测试准备\n\n### 当前状态\n- 开发正在修复Task模块P0级BUG\n- BUG报告已就绪：107个BUG（P0:60, P1:15, P2:32）\n\n### 准备工作\n1. ✅ 确认测试脚本可用\n2. ✅ 确认测试环境稳定\n3. ⏳ 等待开发修复完成通知\n\n### 回归测试计划\n- 开发修复P0级BUG后 → 执行第13轮全量测试\n- 目标：通过率提升至≥60%\n\n请保持",
       "reason": "QA需要保持准备状态，等待开发修复完成后立即执行回归测试"
+    },
+    {
+      "timestamp": "2026-04-02T21:05:45.057688",
+      "source_group": "dev-working-group",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [],
+      "message_content": "## 🚨 紧急：执行数据库迁移脚本\n\nfullstack-dev已完成Task模块部分BUG修复，需要执行数据库迁移才能生效。\n\n### 📋 迁移脚本\n```bash\npsql -U admin -d agent_task -f backend/migrations/add-changer-info-to-status-histories.sql\n```\n\n### ⚠️ 背景\n- V5.9失败用例",
+      "reason": "fullstack-dev已创建迁移脚本但无法直接执行，需要ops执行数据库迁移后才能继续修复工作"
+    },
+    {
+      "timestamp": "2026-04-02T21:05:49.684503",
+      "source_group": "plan-design-group",
+      "target_group": "dev-working-group",
+      "target_group_name": "开发工作群",
+      "mention_users": [
+        "fullstack-dev"
+      ],
+      "extracted_issues": [],
+      "message_content": "## 📋 V5.9修复工作继续\n\n### ✅ 已完成\n- BUG-022: 创建任务API（添加projectId字段）\n- BUG-023: 获取任务列表API\n- 迁移脚本已创建\n\n### 🔄 等待中\n- ops执行数据库迁移脚本\n\n### 🎯 迁移完成后继续\n- 修复Task模块剩余6个P0级BUG\n- 然后处理Project、Comment、Auth、User模块\n\n### 📊 目标\n- ",
+      "reason": "fullstack-dev会话已停止，需要通知其当前进度和下一步行动"
+    },
+    {
+      "timestamp": "2026-04-02T21:10:41.409436",
+      "source_group": "ops-release-group",
+      "target_group": "dev-working-group",
+      "target_group_name": "开发工作群",
+      "mention_users": [
+        "fullstack-dev"
+      ],
+      "extracted_issues": [],
+      "message_content": "## 📋 V5.9修复工作继续\n\n### ✅ 已完成\n- ops已执行数据库迁移脚本：add-changer-info-to-status-histories.sql\n- task_status_histories表已添加changer_name和changer_id列\n\n### 🎯 下一步行动\n请继续修复Task模块剩余P0级BUG：\n1. BUG-024: 更新任务API 500错误\n2. B",
+      "reason": "ops已完成数据库迁移，fullstack-dev会话已停止但修复任务未完成，需要通知继续修复"
+    },
+    {
+      "timestamp": "2026-04-02T21:10:47.897581",
+      "source_group": "dev-working-group",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [],
+      "message_content": "## ✅ 数据库迁移确认\n\n收到确认：add-changer-info-to-status-histories.sql已执行成功。\n\n### 📋 等待开发修复完成\nfullstack-dev正在继续修复Task模块P0级BUG，修复完成后需要：\n1. 部署新版本到TEST环境\n2. 通知QA执行第13轮全量回归测试\n\n请保持待命状态。",
+      "reason": "确认ops工作已完成，告知下一步计划"
     }
   ],
   "activation_attempts": {
