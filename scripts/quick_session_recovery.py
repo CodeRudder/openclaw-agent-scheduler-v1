@@ -37,6 +37,9 @@ except ImportError:
 # 项目根目录
 PROJECT_DIR = Path(__file__).parent.parent
 
+# 激活冷却时间（秒）
+ACTIVATION_COOLDOWN = 180  # 3分钟内不重复激活
+
 # Agent会话目录
 AGENTS_BASE = Path("/home/gongdewei/.openclaw/agents")
 
@@ -185,21 +188,47 @@ def send_activation_message(group_id: str, agent_name: str) -> bool:
 
 
 def check_and_recover():
-    """检查所有agent会话并恢复异常停止的"""
+    """检查所有agent会话并恢复异常停止的
+
+    ⚠️ 只激活有执行中/阻塞任务的agent，空闲agent禁止激活
+    """
     print(f"\n{'='*60}")
     print(f"🔍 会话恢复检查 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}")
+
+    # 加载调度计划，获取有任务的agent列表
+    active_agents = set()  # 有执行中/阻塞任务的agent
+    try:
+        plan_file = PROJECT_DIR / "data" / "scheduling_plan.json"
+        if plan_file.exists():
+            with open(plan_file, 'r', encoding='utf-8') as f:
+                plan = json.load(f)
+
+            for milestone in plan.get("milestones", []):
+                status = milestone.get("status", "")
+                assigned_to = milestone.get("assigned_to", "")
+                if status in ("in_progress", "blocked") and assigned_to:
+                    # assigned_to可能是"all"或具体agent名
+                    if assigned_to == "all":
+                        continue
+                    active_agents.add(assigned_to.lstrip('@').lower())
+
+            print(f"📋 有活跃任务的agent: {active_agents if active_agents else '无'}")
+    except Exception as e:
+        print(f"⚠️ 加载调度计划失败: {e}")
 
     # 加载恢复记录
     records = load_recovery_records()
     now = datetime.now(timezone.utc)
     recovered_count = 0
+    skipped_count = 0
 
     for group_id, group_config in GROUPS.items():
         group_name = group_config["name"]
         print(f"\n📁 {group_name}")
 
         for agent_name in group_config["agents"]:
+            agent_key = agent_name.lower()
             session_files = get_session_files(agent_name)
 
             if not session_files:
@@ -227,6 +256,12 @@ def check_and_recover():
 
             # 检查是否需要恢复（error/aborted）
             if stop_reason in ("error", "aborted"):
+                # ⚠️ 关键检查：是否有活跃任务？
+                if agent_key not in active_agents:
+                    print(f" → ⏭️ 跳过（无活跃任务）")
+                    skipped_count += 1
+                    continue
+
                 # 检查冷却时间
                 record_key = f"{group_id}:{agent_name}"
                 last_recovery = records.get(record_key, {}).get("last_recovery")
@@ -259,7 +294,9 @@ def check_and_recover():
     save_recovery_records(records)
 
     print(f"\n{'='*60}")
-    print(f"✅ 检查完成，恢复 {recovered_count} 个异常会话")
+    print(f"✅ 检查完成")
+    print(f"   - 恢复异常会话: {recovered_count} 个")
+    print(f"   - 跳过空闲agent: {skipped_count} 个")
     return recovered_count
 
 

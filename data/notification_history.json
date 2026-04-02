@@ -1,30 +1,6 @@
 {
   "history": [
     {
-      "timestamp": "2026-04-02T21:05:49.684503",
-      "source_group": "plan-design-group",
-      "target_group": "dev-working-group",
-      "target_group_name": "开发工作群",
-      "mention_users": [
-        "fullstack-dev"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 📋 V5.9修复工作继续\n\n### ✅ 已完成\n- BUG-022: 创建任务API（添加projectId字段）\n- BUG-023: 获取任务列表API\n- 迁移脚本已创建\n\n### 🔄 等待中\n- ops执行数据库迁移脚本\n\n### 🎯 迁移完成后继续\n- 修复Task模块剩余6个P0级BUG\n- 然后处理Project、Comment、Auth、User模块\n\n### 📊 目标\n- ",
-      "reason": "fullstack-dev会话已停止，需要通知其当前进度和下一步行动"
-    },
-    {
-      "timestamp": "2026-04-02T21:10:41.409436",
-      "source_group": "ops-release-group",
-      "target_group": "dev-working-group",
-      "target_group_name": "开发工作群",
-      "mention_users": [
-        "fullstack-dev"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 📋 V5.9修复工作继续\n\n### ✅ 已完成\n- ops已执行数据库迁移脚本：add-changer-info-to-status-histories.sql\n- task_status_histories表已添加changer_name和changer_id列\n\n### 🎯 下一步行动\n请继续修复Task模块剩余P0级BUG：\n1. BUG-024: 更新任务API 500错误\n2. B",
-      "reason": "ops已完成数据库迁移，fullstack-dev会话已停止但修复任务未完成，需要通知继续修复"
-    },
-    {
       "timestamp": "2026-04-02T21:10:47.897581",
       "source_group": "dev-working-group",
       "target_group": "ops-release-group",
@@ -248,14 +224,43 @@
       "extracted_issues": [],
       "message_content": "## 🔄 恢复部署任务\n\n### 当前状态\n- ✅ TypeScript编译错误已修复（commit 945740f）\n- ✅ Task模块9个BUG已修复\n- ✅ Project模块8个BUG已修复\n- ✅ Comment模块4个BUG已修复\n\n### 立即行动\n请立即部署最新代码到TEST环境：\n1. 拉取最新代码（prepare/v5.9分支）\n2. 执行构建和部署\n3. 验证服务健康状态\n",
       "reason": "ops因API速率限制会话中断，需要恢复部署任务。TypeScript编译错误已修复，可以继续部署。"
+    },
+    {
+      "timestamp": "2026-04-02T22:10:49.179942",
+      "source_group": "ops-release-group",
+      "target_group": "dev-working-group",
+      "target_group_name": "开发工作群",
+      "mention_users": [
+        "fullstack-dev"
+      ],
+      "extracted_issues": [
+        "TS2322: Project | null类型错误"
+      ],
+      "message_content": "## 🔄 恢复BUG修复任务\n\n### ⚠️ 当前阻塞\n**TEST环境部署失败**：\n- 错误：TS2322: Type 'Project | null' is not assignable to type 'Project'\n- 文件：src/modules/project/project.service.ts:133\n- 原因：findOne()返回类型包含null，需要处理\n\n### ✅ ",
+      "reason": "fullstack-dev因API速率限制中断，TEST环境部署因TypeScript类型错误失败。需要通知fullstack-dev恢复工作并修复类型错误，才能继续部署和测试。"
+    },
+    {
+      "timestamp": "2026-04-02T22:10:54.985636",
+      "source_group": "dev-working-group",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [],
+      "message_content": "## 📋 部署状态更新\n\n### 当前状态\n- ❌ TEST环境部署失败（TypeScript类型错误）\n- ⏳ 已通知@fullstack-dev修复类型错误\n- 📦 等待修复完成后重新部署\n\n### 🔧 需要修复的错误\n```\nTS2322: Type 'Project | null' is not assignable to type 'Project'\n文件：src/modules/pro",
+      "reason": "ops需要了解当前部署阻塞状态，等待fullstack-dev修复类型错误后才能重新部署。"
     }
   ],
   "activation_attempts": {
-    "dev-working-group:fullstack-dev": {
-      "last_activation_time": "2026-04-02T22:00:49.039919"
-    },
     "qa-acceptance-group:qa": {
       "last_activation_time": "2026-04-02T22:00:49.047009"
+    },
+    "dev-working-group:fullstack-dev": {
+      "last_activation_time": "2026-04-02T22:10:41.020452"
+    },
+    "ops-release-group:ops": {
+      "last_activation_time": "2026-04-02T22:10:41.028130"
     }
   },
   "token_anxiety_counts": {
