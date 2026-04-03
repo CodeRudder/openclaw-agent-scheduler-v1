@@ -247,5 +247,168 @@ class TestMemoryLimit:
         assert stats['memory_mb'] < 1
 
 
+# ===== 纯文本格式测试 =====
+
+class TestParsePlainText:
+    """测试解析纯文本格式（OpenClaw Agent Read 结果）"""
+
+    def setup_method(self):
+        clear_cache()
+
+    def test_parse_plain_text_with_file_path(self):
+        """解析纯文本格式（带 file_path 参数）"""
+        content = """# IDENTITY.md
+
+## 角色信息
+
+- Name: Fullstack Developer
+- Role: 全栈开发工程师
+
+## 核心职责
+
+### 前端开发
+1. Web应用开发
+2. 移动应用开发
+"""
+        result = parse_read_result(content, file_path="IDENTITY.md")
+        assert "IDENTITY.md" in result
+        hash_map = result["IDENTITY.md"]
+        # 验证某些行的 hash 存在
+        assert hash("# IDENTITY.md") in hash_map
+        assert hash_map[hash("# IDENTITY.md")] == 1
+        assert hash("- Name: Fullstack Developer") in hash_map
+
+    def test_parse_plain_text_line_numbers(self):
+        """验证纯文本格式的行号从1开始"""
+        content = "line1\nline2\nline3"
+        result = parse_read_result(content, file_path="test.txt")
+        hash_map = result.get("test.txt", {})
+        assert hash_map.get(hash("line1")) == 1
+        assert hash_map.get(hash("line2")) == 2
+        assert hash_map.get(hash("line3")) == 3
+
+    def test_parse_plain_text_empty_content(self):
+        """空内容"""
+        result = parse_read_result("", file_path="test.txt")
+        assert result == {} or result.get("test.txt") == {}
+
+    def test_find_line_in_plain_text(self):
+        """在纯文本缓存中查找行"""
+        content = """### 核心特质
+- 精通前后端开发技术
+- 熟悉DevOps工具和流程
+- 快速响应和解决问题
+"""
+        result = parse_read_result(content, file_path="IDENTITY.md")
+        file_cache = result
+
+        # 查找多行内容
+        old_string = "### 核心特质\n- 精通前后端开发技术\n- 熟悉DevOps工具和流程"
+        line_num = find_edit_start_line(file_cache, "IDENTITY.md", old_string)
+        assert line_num == 1  # 第一行开始
+
+    def test_find_line_in_plain_text_middle(self):
+        """在纯文本缓存中间查找行"""
+        content = """# Header
+
+## Section 1
+content 1
+
+## Section 2
+content 2
+"""
+        result = parse_read_result(content, file_path="test.md")
+        file_cache = result
+
+        old_string = "## Section 2\ncontent 2"
+        line_num = find_edit_start_line(file_cache, "test.md", old_string)
+        assert line_num == 6  # 第6行开始
+
+
+# ===== 真实会话消息测试 =====
+
+class TestRealSessionData:
+    """使用真实会话数据片段测试"""
+
+    def setup_method(self):
+        clear_cache()
+
+    def test_real_openclaw_read_result(self):
+        """测试 OpenClaw Agent 真实 Read 结果"""
+        # 从真实会话中提取的 IDENTITY.md 片段
+        content = """# IDENTITY.md - 身份定义
+
+## 🤖 自身定位
+
+**我是AI Agent，非人类！**
+
+### 核心特征
+- ✅ AI驱动的Agent，24/7工作
+- ✅ 无需睡眠、休息、下班时间
+- ✅ 任务到达立即响应
+- ✅ 随时监控项目进度
+
+### 禁止行为
+- ❌ 说"晚安"、"休息"、"下班"、"明日继续"
+- ❌ 因时间原因延迟任务
+
+---
+
+## 🎯 角色信息
+
+- **Name:** Fullstack Developer (全栈开发工程师)
+- **Role:** 全栈开发工程师 / DevOps工程师
+- **Vibe:** 技术全面、追求卓越、快速响应
+- **专长:** 前端开发、后端开发、DevOps、全栈技术选型
+- **能力:** 独立完成前后端开发、配置CI/CD、部署运维
+
+### 核心特质
+- 精通前后端开发技术
+- 熟悉DevOps工具和流程
+- 快速响应和解决问题
+- 追求代码质量和系统稳定性
+"""
+        result = parse_read_result(content, file_path="/home/user/.openclaw/workspace/IDENTITY.md")
+        file_cache = result
+
+        # 查找真实 Edit 操作的 old_string
+        old_string = """- **Name:** Fullstack Developer (全栈开发工程师)
+- **Role:** 全栈开发工程师 / DevOps工程师
+- **Vibe:** 技术全面、追求卓越、快速响应
+- **专长:** 前端开发、后端开发、DevOps、全栈技术选型
+- **能力:** 独立完成前后端开发、配置CI/CD、部署运维
+
+### 核心特质
+- 精通前后端开发技术
+- 熟悉DevOps工具和流程
+- 快速响应和解决问题
+- 追求代码质量和系统稳定性"""
+
+        line_num = find_edit_start_line(
+            file_cache,
+            "/home/user/.openclaw/workspace/IDENTITY.md",
+            old_string
+        )
+        # 应该在第21行开始（角色信息部分）
+        assert line_num == 21
+
+    def test_real_claude_read_result(self):
+        """测试 Claude 项目格式（带行号前缀）"""
+        # Claude 项目的 Read 工具结果格式
+        content = """Contents of scheduler.py:
+     1→def hello():
+     2→    print("hello")
+     3→    return True
+     4→
+     5→def world():
+     6→    print("world")
+"""
+        result = parse_read_result(content)
+        assert "scheduler.py" in result
+        hash_map = result["scheduler.py"]
+        assert hash_map[hash('def hello():')] == 1
+        assert hash_map[hash('def world():')] == 5
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

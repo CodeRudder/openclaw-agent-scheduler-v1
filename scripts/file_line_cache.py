@@ -67,13 +67,18 @@ def _add_to_cache(file_path: str, hash_map: Dict[int, int]):
     _cache_order.append(file_path)
 
 
-def parse_read_result(content: str) -> Dict[str, Dict[int, int]]:
+def parse_read_result(content: str, file_path: str = None) -> Dict[str, Dict[int, int]]:
     """解析Read工具的结果，提取文件内容
+
+    支持两种格式：
+    1. 带行号前缀：如 "     1→def hello():" 或 "     1│def hello():"
+    2. 纯文本格式：无行号前缀，自动从1开始编号
 
     使用 hash(line_content) -> line_num 映射，减少内存占用
 
     Args:
         content: Read工具的输出内容
+        file_path: 可选的文件路径（用于纯文本格式）
 
     Returns:
         {file_path: {hash(line_content): line_num, ...}}
@@ -101,6 +106,9 @@ def parse_read_result(content: str) -> Dict[str, Dict[int, int]]:
         r':?\s*$'
     )
 
+    # 检测是否有带行号的行
+    has_numbered_lines = any(line_pattern.match(line) for line in lines[:20])
+
     for line in lines:
         # 检测文件路径标记
         file_match = file_pattern.match(line.strip())
@@ -125,6 +133,16 @@ def parse_read_result(content: str) -> Dict[str, Dict[int, int]]:
     if current_file and file_hash_map:
         _add_to_cache(current_file, file_hash_map)
         result[current_file] = file_hash_map
+    elif not has_numbered_lines and file_path:
+        # 纯文本格式：没有检测到带行号的行，使用传入的 file_path
+        # 为每行生成递增行号（从1开始）
+        file_hash_map = {}
+        for line_num, line in enumerate(lines, start=1):
+            content_hash = hash(line.rstrip())
+            file_hash_map[content_hash] = line_num
+        if file_hash_map:
+            _add_to_cache(file_path, file_hash_map)
+            result[file_path] = file_hash_map
 
     return result
 

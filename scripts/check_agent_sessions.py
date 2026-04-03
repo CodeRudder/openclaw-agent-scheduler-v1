@@ -379,14 +379,23 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
         error_icon = "❌" if is_error else "✅"
         print(f"\n[{line_num}] 📤 {tool_name} | {error_icon} | ⏰ {time_str or '无时间'}")
         # 提取工具结果内容
+        result_text = ""
         if isinstance(content_raw, list):
             for item in content_raw:
                 if isinstance(item, dict) and item.get("type") == "text":
-                    text = item.get("text", "")
-                    _print_tool_result(text)
+                    result_text = item.get("text", "")
                     break
         elif isinstance(content_raw, str):
-            _print_tool_result(content_raw)
+            result_text = content_raw
+
+        if result_text:
+            # 如果是 Read 工具结果，尝试缓存文件内容（用于后续 Edit 真实行号）
+            if tool_name.lower() == "read" and file_cache.get("_last_read_file"):
+                last_file = file_cache["_last_read_file"]
+                parsed = parse_read_result(result_text, file_path=last_file)
+                if parsed:
+                    file_cache.update(parsed)
+            _print_tool_result(result_text)
         return file_cache
 
     # 状态显示
@@ -432,6 +441,9 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
                     elif "file_path" in inp:
                         # Read/Write 等文件工具
                         print(f"    🔧 [工具调用: {name}] {inp['file_path']}")
+                        # 记录 Read 工具的 file_path，用于后续缓存 toolResult 内容
+                        if name.lower() == "read":
+                            file_cache["_last_read_file"] = inp['file_path']
                     elif "pattern" in inp:
                         # Grep/Glob 等搜索工具
                         print(f"    🔧 [工具调用: {name}] {inp['pattern']}")
@@ -443,10 +455,12 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
                 result = item.get("content", "")
                 tool_use_id = item.get("tool_use_id", "")
                 if isinstance(result, str):
-                    # 尝试解析 Read 工具结果，缓存文件内容
-                    parsed = parse_read_result(result)
-                    if parsed:
-                        file_cache.update(parsed)
+                    # 尝试解析 Read 工具结果，缓存文件内容（用于后续 Edit 真实行号）
+                    last_file = file_cache.get("_last_read_file")
+                    if last_file:
+                        parsed = parse_read_result(result, file_path=last_file)
+                        if parsed:
+                            file_cache.update(parsed)
                     _print_tool_result(result)
                 else:
                     print(f"    📤 [工具结果]")
