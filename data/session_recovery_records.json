@@ -1,1 +1,32 @@
-{}
+{
+  "dev-working-group:fullstack-dev": {
+    "last_recovery": "2026-04-03T19:37:01.957009+00:00",
+    "stop_reason": "error",
+    "error_message": "401 {\"error\":{\"message\":\"Authentication Error, LiteLLM Virtual Key expected. Received=cr_d****1848, "
+  },
+  "qa-acceptance-group:qa": {
+    "last_recovery": "2026-04-03T14:48:01.352528+00:00",
+    "stop_reason": "error",
+    "error_message": "Unhandled stop reason: model_context_window_exceeded"
+  },
+  "plan-design-group:qa": {
+    "last_recovery": "2026-04-03T14:48:01.352528+00:00",
+    "stop_reason": "error",
+    "error_message": "Unhandled stop reason: model_context_window_exceeded"
+  },
+  "ops-release-group:ops": {
+    "last_recovery": "2026-04-03T02:33:01.170618+00:00",
+    "stop_reason": "error",
+    "error_message": "{\"error\":{\"code\":\"1305\",\"message\":\"该模型当前访问量过大，请您稍后再试\"},\"request_id\":\"20260403103257412a952d25774309\""
+  },
+  "qa-acceptance-group:product": {
+    "last_recovery": "2026-04-03T14:37:01.835458+00:00",
+    "stop_reason": "error",
+    "error_message": "Unhandled stop reason: model_context_window_exceeded"
+  },
+  "plan-design-group:product": {
+    "last_recovery": "2026-04-03T14:37:01.835458+00:00",
+    "stop_reason": "error",
+    "error_message": "Unhandled stop reason: model_context_window_exceeded"
+  }
+}

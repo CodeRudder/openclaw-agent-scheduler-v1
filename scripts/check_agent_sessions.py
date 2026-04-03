@@ -444,6 +444,9 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
                         if file_path and old_str:
                             print(f"    🔧 [工具调用: {name}]")
                             print(f"       📄 file: {file_path}")
+                            # 如果file_cache为空，尝试从当前会话回溯查找Read结果
+                            if not file_cache or file_path not in file_cache:
+                                _backfill_file_cache_from_session(raw_msg, file_cache, file_path)
                             _print_edit_diff(old_str, new_str, file_cache=file_cache, file_path=file_path)
                         else:
                             print(f"    🔧 [工具调用: {name}] {file_path or '?'}")
@@ -708,6 +711,67 @@ def _compute_diff_with_lines(old_lines: list, new_lines: list, start_line: int =
     return result
 
 
+def _backfill_file_cache_from_session(current_msg: dict, file_cache: dict, target_file_path: str):
+    """从当前会话回溯查找Read工具结果，填充file_cache
+
+    当Edit工具调用时file_cache为空，尝试从会话历史中查找对应文件的Read结果
+
+    Args:
+        current_msg: 当前消息（包含Edit工具调用）
+        file_cache: 文件缓存字典（会被修改）
+        target_file_path: 目标文件路径
+    """
+    # 获取会话文件路径（从current_msg的父级获取）
+    # 这个函数在print_single_message中调用，无法直接访问会话文件
+    # 作为临时方案，我们在全局变量中存储会话消息
+    global _session_messages_cache
+    if '_session_messages_cache' not in globals():
+        return
+
+    messages = _session_messages_cache
+    target_name = target_file_path.split('/')[-1]
+
+    # 回溯查找Read工具结果
+    for msg in reversed(messages):
+        role = msg.get("message", {}).get("role")
+        if role == "toolResult":
+            tool_name = msg.get("message", {}).get("toolName", "")
+            if tool_name.lower() == "read":
+                # 检查是否是目标文件
+                content = msg.get("message", {}).get("content", [])
+                result_text = ""
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            result_text = item.get("text", "")
+                            break
+                elif isinstance(content, str):
+                    result_text = content
+
+                if result_text:
+                    # 尝试解析并匹配文件路径
+                    # 先尝试从toolUseResult获取文件路径
+                    tool_result_info = msg.get("toolUseResult", {})
+                    file_info = tool_result_info.get("file", {})
+                    file_path_from_result = file_info.get("filePath", "")
+
+                    # 检查是否匹配目标文件
+                    if file_path_from_result and (
+                        file_path_from_result == target_file_path or
+                        file_path_from_result.endswith(target_name) or
+                        target_file_path.endswith(file_path_from_result.split('/')[-1])
+                    ):
+                        # 解析并缓存
+                        file_content = file_info.get("content", "")
+                        if file_content:
+                            parsed = parse_read_result(file_content, file_path=target_file_path)
+                        else:
+                            parsed = parse_read_result(result_text, file_path=target_file_path)
+                        if parsed:
+                            file_cache.update(parsed)
+                            return
+
+
 def _print_content(label: str, content: str):
     """打印内容，超过4k时显示头2k+末尾2k"""
     if len(content) > 4000:
@@ -776,6 +840,10 @@ def parse_session_file(file_path: Path) -> dict:
         "stop_reason": None
     }
 
+    # 设置全局变量，用于回溯查找Read结果
+    global _session_messages_cache
+    _session_messages_cache = []
+
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
@@ -790,6 +858,8 @@ def parse_session_file(file_path: Path) -> dict:
                     if msg_type == "message":
                         message = msg.get("message", {})
                         result["messages"].append(message)
+                        result["raw_messages"].append(msg)
+                        _session_messages_cache.append(msg)
                         result["raw_messages"].append({
                             "timestamp": msg.get("timestamp"),
                             "message": message

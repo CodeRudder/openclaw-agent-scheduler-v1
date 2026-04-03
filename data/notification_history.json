@@ -1,271 +1,298 @@
 {
   "history": [
     {
-      "timestamp": "2026-04-02T21:10:47.897581",
-      "source_group": "dev-working-group",
-      "target_group": "ops-release-group",
-      "target_group_name": "运维发布群",
-      "mention_users": [
-        "ops"
-      ],
-      "extracted_issues": [],
-      "message_content": "## ✅ 数据库迁移确认\n\n收到确认：add-changer-info-to-status-histories.sql已执行成功。\n\n### 📋 等待开发修复完成\nfullstack-dev正在继续修复Task模块P0级BUG，修复完成后需要：\n1. 部署新版本到TEST环境\n2. 通知QA执行第13轮全量回归测试\n\n请保持待命状态。",
-      "reason": "确认ops工作已完成，告知下一步计划"
-    },
-    {
-      "timestamp": "2026-04-02T21:15:46.242058",
-      "source_group": "dev-working-group",
+      "timestamp": "2026-04-04T03:20:32.379313",
+      "source_group": "system-scheduler",
       "target_group": "dev-working-group",
       "target_group_name": "开发工作群",
       "mention_users": [
         "fullstack-dev"
       ],
       "extracted_issues": [
-        "TypeORM关联配置问题：Task__Task_statusHistories.changer_name does not exist"
+        "72个失败用例待修复",
+        "通过率50.34%远低于85%验收标准"
       ],
-      "message_content": "## 🔄 继续V5.9 BUG修复工作\n\n### ✅ 已完成\n- BUG-022/023：创建/获取任务API已修复\n- 数据库迁移：ops已执行add-changer-info-to-status-histories.sql\n\n### 🔧 TypeORM问题解决方案\n架构师建议采用**方案A：修复关联配置**，在TaskStatusHistory实体中明确指定表名和列名：\n\n```typescr",
-      "reason": "fullstack-dev会话已停止且遇到技术问题，需要提供解决方案并鼓励继续工作。架构师已提供3个解决方案，推荐方案A修复关联配置。"
+      "message_content": "[激活消息] ## 🔴 V5.9紧急修复 - 恢复修复任务\n\n### 📊 第8轮测试结果\n- **通过率**：50.34%（73/145）\n- **失败用例**：72个\n- **验收标准**：≥85%\n- **差距**：34.66个百分点\n\n### ✅ 修复进度良好\n从第7轮36.55%提升到第8轮50.34%，",
+      "reason": "[会话停止激活 stopReason=error] fullstack-dev会话因401认证错误中断，需要恢复修复任务。第8轮测试通过率50.34%，距离85%验收标准还有差距，需要继续修复72个失败用例。"
     },
     {
-      "timestamp": "2026-04-02T21:25:43.693624",
-      "source_group": "system",
-      "target_group": "dev-working-group",
-      "target_group_name": "开发工作群",
-      "mention_users": [
-        "fullstack-dev"
-      ],
-      "extracted_issues": [
-        "BUG-025: 更新任务API返回500错误",
-        "BUG-026: 删除任务API返回500错误"
-      ],
-      "message_content": "## 🔄 继续V5.9 BUG修复工作\n\n### ✅ 当前进度\n- 已修复：2/107（BUG-022, BUG-023）\n- 待修复：105个\n\n### 🎯 下一步行动\n1. **按ADR-002方案修复BUG-025/026**：移除TypeORM关联查询，改用基本查询\n2. **继续分批修复**：Task → Project → Comment → Auth → User模块\n3. **每修",
-      "reason": "fullstack-dev会话已停止，需要通知其继续执行V5.9 BUG修复任务。当前卡在TypeORM问题，ADR-002已提供解决方案。"
-    },
-    {
-      "timestamp": "2026-04-02T21:30:37.564030",
-      "source_group": "system",
+      "timestamp": "2026-04-04T03:25:37.747142",
+      "source_group": "system-scheduler",
       "target_group": "dev-working-group",
       "target_group_name": "开发工作群",
       "mention_users": [
         "architect"
       ],
-      "extracted_issues": [],
-      "message_content": "## 📋 ORM改进方案完善请求\n\n### ✅ 已完成\nADR-002文档已创建，方案A（优化TypeORM使用规范）已确定。\n\n### 🔄 请继续完善\n根据@claw-admin指令，请继续改进数据库ORM及查询规范：\n1. 输出具体的代码示例（如何避免复杂关联查询）\n2. 制定查询规范文档，明确何时使用QueryBuilder\n3. 如有必要，评估引入Knex.js的可行性\n\n### 📁 文档",
-      "reason": "架构师已输出初步方案，需要继续完善ORM查询规范，为开发提供更具体的指导"
+      "extracted_issues": [
+        "fullstack-dev 401认证错误阻塞开发工作"
+      ],
+      "message_content": "## 🔴 紧急技术问题 - fullstack-dev认证错误\n\n**问题诊断**：\nfullstack-dev连续5次因401认证错误中断：\n```\nAuthentication Error, LiteLLM Virtual Key expected.\nReceived=cr_d****1848, expected to start with 'sk-'\n```\n\n**需要排查**：\n1. Li",
+      "reason": "fullstack-dev因认证配置问题无法工作，需要技术支持解决。architect具备技术诊断能力，应介入协助解决认证问题。"
     },
     {
-      "timestamp": "2026-04-02T21:35:34.610266",
-      "source_group": "system",
+      "timestamp": "2026-04-04T03:25:37.771334",
+      "source_group": "system-scheduler",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [
+        "LiteLLM认证配置错误"
+      ],
+      "message_content": "[激活消息] ## 🔧 紧急请求 - 排查LiteLLM认证配置\n\n**问题描述**：\nfullstack-dev Agent连续5次因401认证错误中断：\n- 错误：LiteLLM Virtual Key格式错误\n- 收到：cr_d****1848\n- 期望：以'sk-'开头的密钥\n\n**请求排查**：\n1. ",
+      "reason": "[会话停止激活 stopReason=stop] 401认证错误可能是运维配置问题，需要ops排查LiteLLM相关配置。这是阻塞整个V5.9修复工作的关键问题。"
+    },
+    {
+      "timestamp": "2026-04-04T03:30:31.078511",
+      "source_group": "system-scheduler",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [
+        "LiteLLM认证配置错误导致fullstack-dev无法工作"
+      ],
+      "message_content": "[激活消息] ## 🔧 紧急请求 - 排查LiteLLM认证配置\n\n**问题描述**：\nfullstack-dev Agent连续5次因401认证错误中断：\n- 错误信息：`Authentication Error, LiteLLM Virtual Key expected. Received=cr_d****1",
+      "reason": "[会话停止激活 stopReason=error] fullstack-dev因401认证错误无法工作，阻塞V5.9修复进度，需要运维排查LiteLLM认证配置"
+    },
+    {
+      "timestamp": "2026-04-04T03:30:31.097532",
+      "source_group": "system-scheduler",
       "target_group": "dev-working-group",
       "target_group_name": "开发工作群",
       "mention_users": [
-        "fullstack-dev"
+        "architect"
       ],
-      "extracted_issues": [],
-      "message_content": "## 🔄 继续V5.9 BUG修复工作\n\n### ✅ 已完成（4/107）\n- BUG-022：创建任务API → 201 Created\n- BUG-023：获取任务列表API → 200 OK\n- BUG-025：更新任务API → 200 OK\n- BUG-026：删除任务API → 200 OK\n\n### 🎯 下一步行动\n请继续修复Task模块剩余5个P0级BUG，然后按顺序处理：\n1. ",
-      "reason": "fullstack-dev会话停止但任务未完成，需要通知继续修复剩余103个BUG"
+      "extracted_issues": [
+        "fullstack-dev 401认证错误阻塞开发工作"
+      ],
+      "message_content": "[激活消息] ## 🔴 紧急技术问题 - fullstack-dev认证错误\n\n**问题诊断**：\nfullstack-dev连续5次因401认证错误中断：\n```\nAuthentication Error, LiteLLM Virtual Key expected.\nReceived=cr_d****1848,",
+      "reason": "[会话停止激活 stopReason=error] 架构师负责技术架构和配置问题，需要其协助诊断LiteLLM认证错误的根本原因"
     },
     {
-      "timestamp": "2026-04-02T21:35:39.830638",
-      "source_group": "dev-working-group",
+      "timestamp": "2026-04-04T03:35:38.433273",
+      "source_group": "system-scheduler",
       "target_group": "ops-release-group",
       "target_group_name": "运维发布群",
       "mention_users": [
         "ops"
       ],
-      "extracted_issues": [],
-      "message_content": "## 📋 部署准备通知\n\n### 当前状态\n- fullstack-dev已提交3个修复（7d61004、d949cb6、45c88e5）\n- 数据库迁移已完成\n- BUG修复进行中（4/107已完成）\n\n### 准备工作\n请待命，当fullstack-dev完成一批BUG修复后，需要：\n1. 部署新版本到TEST环境\n2. 通知QA执行回归测试\n\n**当前暂不部署，等待开发完成更多BUG修复**",
-      "reason": "通知运维准备后续部署工作，但当前暂不部署"
-    },
-    {
-      "timestamp": "2026-04-02T21:40:51.123492",
-      "source_group": "dev-working-group",
-      "target_group": "ops-release-group",
-      "target_group_name": "运维发布群",
-      "mention_users": [
-        "ops"
+      "extracted_issues": [
+        "LiteLLM认证配置错误：API Key格式不正确，期望'sk-'开头"
       ],
-      "extracted_issues": [],
-      "message_content": "## 📋 部署准备通知\n\n### 当前状态\n- fullstack-dev已提交多个修复（7d61004、d949cb6、45c88e5等）\n- 数据库迁移已完成\n- Task模块6个P0级BUG已修复\n\n### 🎯 待命任务\n等待fullstack-dev完成更多BUG修复后，部署新版本到TEST环境进行第13轮回归测试。\n\n**请保持待命状态，收到部署通知后立即执行。**",
-      "reason": "ops需要保持待命状态，等待开发完成更多修复后部署验证。"
+      "message_content": "[激活消息] ## 🔴 紧急：LiteLLM认证配置错误导致所有Agent无法工作\n\n**问题现象**：\n所有Agent（fullstack-dev、architect、ops）均因401认证错误中断：\n```\n401 {\"error\":{\"message\":\"Authentication Error, Lite",
+      "reason": "[会话停止激活 stopReason=error] 401认证错误是系统性问题，阻塞所有Agent工作。需要人工介入修复LiteLLM配置，这是当前最高优先级的阻塞问题。"
     },
     {
-      "timestamp": "2026-04-02T21:45:43.096203",
-      "source_group": "dev-working-group",
-      "target_group": "ops-release-group",
-      "target_group_name": "运维发布群",
-      "mention_users": [
-        "ops"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 📋 部署请求：V5.9 Task模块BUG修复\n\nfullstack-dev已完成Task模块9个BUG修复（6个已验证，3个待验证）：\n- 提交记录：7d61004、d949cb6、45c88e5、7587131\n- 数据库迁移：已完成\n\n请将最新代码部署到TEST环境，以便QA验证修复效果。\n\n部署后请通知@qa执行第13轮回归测试。",
-      "reason": "fullstack-dev已完成一批BUG修复，需要部署到TEST环境让QA验证修复效果，同时验证BUG-027/029/030"
-    },
-    {
-      "timestamp": "2026-04-02T21:45:50.549578",
-      "source_group": "dev-working-group",
-      "target_group": "qa-acceptance-group",
-      "target_group_name": "验收测试群",
-      "mention_users": [
-        "qa"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 📋 准备第13轮回归测试\n\nV5.9 Task模块BUG修复进展：\n- ✅ 已修复6个：BUG-022/023/024/025/026/028\n- 🔧 待验证3个：BUG-027/029/030（任务分配/优先级/截止日期）\n\n等待@ops部署完成后，请立即执行第13轮全量回归测试（145个用例），验证修复效果。\n\n目标：通过率≥85%",
-      "reason": "通知QA准备执行回归测试，验证BUG修复效果"
-    },
-    {
-      "timestamp": "2026-04-02T21:45:51.227902",
-      "source_group": "system",
-      "target_group": "dev-working-group",
-      "target_group_name": "开发工作群",
-      "mention_users": [
-        "fullstack-dev"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 🔄 V5.9修复工作继续\n\n当前进度：9/107（8.4%）\n- ✅ 已验证：BUG-022/023/024/025/026/028\n- 🔧 待验证：BUG-027/029/030\n\n下次会话优先事项：\n1. 测试验证BUG-027/029/030\n2. 继续修复Task模块剩余P0级BUG\n3. 按模块顺序：Task→Project→Comment→Auth→User\n\n遵循ADR-002",
-      "reason": "fullstack-dev会话停止，需要安排下次继续修复的任务，同时告知上下文正常无需担心"
-    },
-    {
-      "timestamp": "2026-04-02T21:50:42.440246",
-      "source_group": "ops-release-group",
+      "timestamp": "2026-04-04T03:35:38.443483",
+      "source_group": "system-scheduler",
       "target_group": "dev-working-group",
       "target_group_name": "开发工作群",
       "mention_users": [
         "fullstack-dev"
       ],
       "extracted_issues": [
-        "TS2345: string类型不能赋值给TaskPriority类型"
+        "72个失败用例待修复，等待认证问题解决后继续"
       ],
-      "message_content": "## 🚨 紧急：修复TypeScript编译错误\n\n### ❌ 编译错误详情\n- **文件**：src/modules/task/task.controller.ts\n- **行号**：223\n- **错误**：`TS2345: Argument of type 'string' is not assignable to parameter of type 'TaskPriority'`\n- **",
-      "reason": "TEST环境部署因TypeScript编译错误失败，阻塞了整个V5.9修复验证流程。fullstack-dev会话已停止，需要唤醒继续修复编译错误。"
+      "message_content": "[激活消息] ## ⏳ V5.9修复任务暂停 - 等待认证问题修复\n\n**当前状态**：\n- 第8轮测试通过率：50.34%（73/145）\n- 失败用例：72个\n- 验收标准：≥85%\n\n**阻塞原因**：\nLiteLLM认证配置错误（401），技术团队正在紧急修复\n\n**待恢复后任务**：\n1. 继续修复72",
+      "reason": "[会话停止激活 stopReason=error] 通知开发Agent当前阻塞状态和待恢复后的任务，避免Agent恢复后不知道要做什么。同时说明这是系统性问题，不是Agent自身问题。"
     },
     {
-      "timestamp": "2026-04-02T21:50:51.459152",
-      "source_group": "dev-working-group",
+      "timestamp": "2026-04-04T03:40:38.513726",
+      "source_group": "system-scheduler",
       "target_group": "ops-release-group",
       "target_group_name": "运维发布群",
       "mention_users": [
         "ops"
       ],
-      "extracted_issues": [],
-      "message_content": "## 📋 部署状态更新\n\n### 当前状态\n- ❌ TEST环境部署失败（TypeScript编译错误）\n- ⏳ 等待fullstack-dev修复编译错误\n\n### 下一步操作\nfullstack-dev修复编译错误并提交后，请立即：\n1. 重新拉取最新代码\n2. 执行构建\n3. 部署到TEST环境\n4. 部署成功后通知@qa执行第13轮回归测试\n\n### 修复的BUG清单（待验证）\n- BUG",
-      "reason": "运维需要知道当前部署阻塞原因，以及修复后的下一步操作流程。"
+      "extracted_issues": [
+        "LiteLLM API Key格式错误：期望'sk-'开头，实际'cr_d****'"
+      ],
+      "message_content": "[激活消息] ## 🔴 紧急：LiteLLM认证配置错误导致所有Agent无法工作\n\n**问题现象**：\n所有Agent（fullstack-dev、architect、ops）均因401认证错误中断：\n```\n401 {\"error\":{\"message\":\"Authentication Error, Lite",
+      "reason": "[重复任务] 401认证错误是最高优先级阻塞问题，影响所有Agent工作，必须由运维紧急修复"
     },
     {
-      "timestamp": "2026-04-02T21:55:55.369885",
-      "source_group": "ops-release-group",
+      "timestamp": "2026-04-04T03:40:38.526646",
+      "source_group": "system-scheduler",
       "target_group": "dev-working-group",
       "target_group_name": "开发工作群",
       "mention_users": [
         "fullstack-dev"
       ],
       "extracted_issues": [
-        "TS2345: string类型不能赋值给TaskPriority类型"
+        "72个失败用例待修复，通过率50.34%远低于85%验收标准"
       ],
-      "message_content": "## 🚨 紧急：修复TypeScript编译错误并继续BUG修复\n\n### ❌ 当前阻塞\n**编译错误**：task.controller.ts:223行\n- 错误：string类型不能赋值给TaskPriority类型\n- 提交f48f19a未完全修复此问题\n\n### 🎯 立即行动\n1. 修复类型转换：确保priority参数正确转换为TaskPriority枚举\n2. 提交修复代码\n3. 通知",
-      "reason": "fullstack-dev会话因上下文超限异常终止，需要重新启动并告知其继续修复编译错误。编译错误阻塞了整个部署和测试流程。"
+      "message_content": "[激活消息] ## ⏳ V5.9修复任务暂停 - 等待认证问题修复\n\n**当前状态**：\n- 第8轮测试通过率：50.34%（73/145）\n- 失败用例：72个\n- 验收标准：≥85%\n- 差距：34.66个百分点\n\n**阻塞原因**：\nLiteLLM认证配置错误导致401错误，等待运维修复。\n\n**认证问题修",
+      "reason": "[会话停止激活 stopReason=error] 通知开发当前状态和待办任务，等待认证问题解决后立即恢复工作"
     },
     {
-      "timestamp": "2026-04-02T21:56:02.853447",
-      "source_group": "dev-working-group",
+      "timestamp": "2026-04-04T03:45:43.244585",
+      "source_group": "system-scheduler",
       "target_group": "ops-release-group",
       "target_group_name": "运维发布群",
       "mention_users": [
         "ops"
       ],
-      "extracted_issues": [],
-      "message_content": "## 📋 部署状态更新\n\n### 当前状态\n- ❌ TEST环境部署失败（TypeScript编译错误）\n- ⏳ 已通知@fullstack-dev修复编译错误\n\n### 🔄 修复后立即执行\n收到@fullstack-dev修复提交后：\n1. 重新拉取最新代码\n2. 执行构建\n3. 部署到TEST环境\n4. 部署成功后通知@qa执行第13轮回归测试\n\n### 📦 待部署的修复\n- 提交：7d610",
-      "reason": "运维需要知道当前阻塞状态和修复后的执行流程，保持待命状态"
-    },
-    {
-      "timestamp": "2026-04-02T21:56:10.939437",
-      "source_group": "ops-release-group",
-      "target_group": "qa-acceptance-group",
-      "target_group_name": "验收测试群",
-      "mention_users": [
-        "qa"
+      "extracted_issues": [
+        "401认证错误：LiteLLM API Key格式不正确"
       ],
-      "extracted_issues": [],
-      "message_content": "## 📋 第13轮回归测试状态更新\n\n### ⚠️ 当前阻塞\n- 部署失败：TypeScript编译错误\n- 正在处理：已通知@fullstack-dev修复\n\n### 🔄 部署成功后立即执行\n1. 验证测试环境已更新\n2. 执行第13轮全量回归测试（145个用例）\n3. 重点验证Task模块修复效果（9个BUG）\n4. 输出测试报告\n\n### 📊 预期验证内容\n- ✅ BUG-022/023/0",
-      "reason": "QA因API速率限制会话异常，需要告知当前状态和后续执行计划"
+      "message_content": "[激活消息] ## 🔴 紧急：LiteLLM认证配置错误阻塞所有开发工作\n\n**问题现象**：\nfullstack-dev和architect连续遭遇401认证错误：\n```\n401 {\"error\":{\"message\":\"Authentication Error, LiteLLM Virtual Key ex",
+      "reason": "[会话停止激活 stopReason=stop] LiteLLM认证配置错误导致所有开发Agent无法工作，必须由运维紧急修复"
     },
     {
-      "timestamp": "2026-04-02T22:00:54.867699",
-      "source_group": "ops-release-group",
-      "target_group": "qa-acceptance-group",
-      "target_group_name": "验收测试群",
-      "mention_users": [
-        "qa"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 🔄 恢复测试任务\n\n### 当前状态\n- ✅ 测试脚本就绪（145个用例）\n- ✅ TypeScript编译错误已修复\n- ⏳ 等待ops部署完成\n\n### 立即行动\n收到ops部署完成通知后：\n1. 立即执行第13轮全量回归测试\n2. 重点验证Task模块9个BUG修复效果：\n   - BUG-022/023/024/025/026/028（已验证通过）\n   - BUG-027/029/",
-      "reason": "qa因API速率限制会话异常终止，需要通知恢复测试任务。等待ops部署完成后立即执行第13轮回归测试。"
-    },
-    {
-      "timestamp": "2026-04-02T22:01:01.481505",
-      "source_group": "qa-acceptance-group",
-      "target_group": "dev-working-group",
-      "target_group_name": "开发工作群",
-      "mention_users": [
-        "fullstack-dev"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 🔄 恢复BUG修复任务\n\n### 当前进度\n- ✅ 已修复9/107个BUG（8.4%）\n- ✅ TypeScript编译错误已修复（945740f）\n- ✅ ADR-002规范已遵循\n\n### 立即行动\n1. 确认commit 945740f已推送\n2. 等待QA第13轮测试结果\n3. 根据测试结果继续修复：\n   - 第2批：Project模块（8个P0级BUG）\n   - 第3批：Co",
-      "reason": "fullstack-dev因API速率限制会话异常终止，需要通知恢复BUG修复任务。当前已修复9个BUG，等待QA验证后继续修复剩余BUG。"
-    },
-    {
-      "timestamp": "2026-04-02T22:05:42.182172",
-      "source_group": "dev-working-group",
-      "target_group": "ops-release-group",
-      "target_group_name": "运维发布群",
-      "mention_users": [
-        "ops"
-      ],
-      "extracted_issues": [],
-      "message_content": "## 🔄 恢复部署任务\n\n### 当前状态\n- ✅ TypeScript编译错误已修复（commit 945740f）\n- ✅ Task模块9个BUG已修复\n- ✅ Project模块8个BUG已修复\n- ✅ Comment模块4个BUG已修复\n\n### 立即行动\n请立即部署最新代码到TEST环境：\n1. 拉取最新代码（prepare/v5.9分支）\n2. 执行构建和部署\n3. 验证服务健康状态\n",
-      "reason": "ops因API速率限制会话中断，需要恢复部署任务。TypeScript编译错误已修复，可以继续部署。"
-    },
-    {
-      "timestamp": "2026-04-02T22:10:49.179942",
-      "source_group": "ops-release-group",
+      "timestamp": "2026-04-04T03:45:43.266319",
+      "source_group": "system-scheduler",
       "target_group": "dev-working-group",
       "target_group_name": "开发工作群",
       "mention_users": [
         "fullstack-dev"
       ],
       "extracted_issues": [
-        "TS2322: Project | null类型错误"
+        "72个失败用例待修复"
       ],
-      "message_content": "## 🔄 恢复BUG修复任务\n\n### ⚠️ 当前阻塞\n**TEST环境部署失败**：\n- 错误：TS2322: Type 'Project | null' is not assignable to type 'Project'\n- 文件：src/modules/project/project.service.ts:133\n- 原因：findOne()返回类型包含null，需要处理\n\n### ✅ ",
-      "reason": "fullstack-dev因API速率限制中断，TEST环境部署因TypeScript类型错误失败。需要通知fullstack-dev恢复工作并修复类型错误，才能继续部署和测试。"
+      "message_content": "[激活消息] ## ⏳ V5.9修复任务暂停 - 等待认证问题修复\n\n**当前状态**：\n- 第8轮测试通过率：50.34%（73/145）\n- 失败用例：72个\n- 距离验收标准：还差34.66个百分点\n\n**阻塞原因**：\nLiteLLM认证配置错误（401），运维正在紧急处理\n\n**等待恢复后请继续**：\n",
+      "reason": "[会话停止激活 stopReason=stop] 通知开发当前任务状态，等待认证问题修复后继续"
     },
     {
-      "timestamp": "2026-04-02T22:10:54.985636",
-      "source_group": "dev-working-group",
+      "timestamp": "2026-04-04T03:50:43.824530",
+      "source_group": "system-scheduler",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [
+        "401认证错误：LiteLLM API Key格式不正确"
+      ],
+      "message_content": "[激活消息] ## 🔴 紧急：LiteLLM认证配置错误阻塞所有开发工作\n\n**问题现象**：\nfullstack-dev和architect连续遭遇401认证错误：\n```\n401 {\"error\":{\"message\":\"Authentication Error, LiteLLM Virtual Key ex",
+      "reason": "[会话停止激活 stopReason=stop] LiteLLM认证错误是当前最高优先级阻塞问题，必须由运维修复配置才能恢复开发工作"
+    },
+    {
+      "timestamp": "2026-04-04T03:55:40.147367",
+      "source_group": "system-scheduler",
+      "target_group": "dev-working-group",
+      "target_group_name": "开发工作群",
+      "mention_users": [
+        "fullstack-dev"
+      ],
+      "extracted_issues": [
+        "V5.9通过率50.34%，目标85%"
+      ],
+      "message_content": "[激活消息] ## 📊 V5.9修复进度确认\n\n**当前状态**：\n- 第8轮测试通过率：50.34%（73/145）\n- 你报告的修复后通过率：59.31%（86/145）\n- 失败用例：72个（按你的报告是59个）\n- 验收标准：≥85%\n\n**下一步行动**：\n1. 请确认最新修复代码已推送到主仓库\n2. ",
+      "reason": "[会话停止激活 stopReason=stop] fullstack-dev报告通过率59.31%但第8轮测试只有50.34%，需要确认最新代码是否已部署并验证"
+    },
+    {
+      "timestamp": "2026-04-04T03:55:40.167677",
+      "source_group": "system-scheduler",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [
+        "代码部署状态确认"
+      ],
+      "message_content": "[激活消息] ## 🚀 部署请求 - 验证fullstack-dev最新修复\n\n**背景**：\n- fullstack-dev报告已完成14个commits修复\n- 报告通过率：59.31%（86/145）\n- 第8轮测试通过率：50.34%（73/145）\n\n**请确认**：\n1. 主仓库prepare/v5.",
+      "reason": "[会话停止激活 stopReason=stop] 需要确认fullstack-dev的最新修复是否已部署到TEST环境，以便验证59.31%的通过率"
+    },
+    {
+      "timestamp": "2026-04-04T04:00:41.384438",
+      "source_group": "system-scheduler",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [
+        "fullstack-dev最新修复代码未部署到TEST环境"
+      ],
+      "message_content": "[激活消息] ## 🚀 紧急部署请求 - V5.9最新修复代码\n\n**背景**：\n- fullstack-dev已完成14个commits修复\n- 报告通过率：59.31%（86/145）\n- 当前TEST环境通过率：50.34%（73/145）\n\n**部署要求**：\n1. 拉取prepare/v5.9分支最新代",
+      "reason": "[会话停止激活 stopReason=stop] fullstack-dev已完成修复，需要运维部署到TEST环境验证修复效果，然后QA才能执行第9轮测试"
+    },
+    {
+      "timestamp": "2026-04-04T04:00:41.403213",
+      "source_group": "system-scheduler",
+      "target_group": "dev-working-group",
+      "target_group_name": "开发工作群",
+      "mention_users": [
+        "fullstack-dev"
+      ],
+      "extracted_issues": [
+        "72个失败用例待修复，通过率50.34%远低于85%验收标准"
+      ],
+      "message_content": "[激活消息] ## 📊 V5.9修复进度确认\n\n**当前状态**：\n- 第8轮测试通过率：50.34%（73/145）\n- 你报告的修复后通过率：59.31%（86/145）\n- 差距：仍需26个百分点达到85%验收标准\n\n**已完成修复**：\n- ✅ 15个commits已推送\n- ✅ 数据库表创建、UUID替",
+      "reason": "[会话停止激活 stopReason=stop] fullstack-dev会话多次中断，需要确认任务状态并推动继续修复剩余失败用例"
+    },
+    {
+      "timestamp": "2026-04-04T04:23:39.483081",
+      "source_group": "system-scheduler",
+      "target_group": "ops-release-group",
+      "target_group_name": "运维发布群",
+      "mention_users": [
+        "ops"
+      ],
+      "extracted_issues": [
+        "fullstack-dev最新修复代码未部署到TEST环境"
+      ],
+      "message_content": "## 🚀 紧急部署请求 - V5.9最新修复代码\n\n**背景**：\n- fullstack-dev已完成14个commits修复\n- 报告通过率：59.31%（86/145）\n- 当前TEST环境：commit c1f797d（通过率50.34%）\n\n**立即执行**：\n1. 拉取最新代码到TEST环境\n2. 重启后端服务\n3. 验证健康检查：http://localhost:4100/api/v",
+      "reason": "fullstack-dev报告修复后通过率59.31%，但代码未部署到TEST环境验证。需要ops立即部署以便QA验证"
+    },
+    {
+      "timestamp": "2026-04-04T04:23:45.143616",
+      "source_group": "system-scheduler",
+      "target_group": "dev-working-group",
+      "target_group_name": "开发工作群",
+      "mention_users": [
+        "fullstack-dev"
+      ],
+      "extracted_issues": [
+        "72个失败用例待修复，通过率50.34%远低于85%验收标准"
+      ],
+      "message_content": "## 📊 V5.9修复进度确认\n\n**当前状态**：\n- 第8轮测试通过率：50.34%（73/145）\n- 你报告的修复后通过率：59.31%（86/145）\n- 验收标准：≥85%\n- 差距：还需提升25.69个百分点\n\n**立即行动**：\n1. 确认14个commits已推送到远程仓库\n2. 配合ops完成TEST环境部署\n3. 继续修复剩余失败用例（目标85%+）\n4. 每次修复后提供自测",
+      "reason": "fullstack-dev报告修复进度但会话中断，需要确认修复状态并推动继续修复"
+    },
+    {
+      "timestamp": "2026-04-04T04:30:44.104646",
+      "source_group": "ops-release-group",
+      "target_group": "qa-acceptance-group",
+      "target_group_name": "验收测试群",
+      "mention_users": [
+        "qa"
+      ],
+      "extracted_issues": [
+        "第9轮测试API服务未运行导致100个用例失败"
+      ],
+      "message_content": "## 🚀 TEST环境已恢复 - 请立即执行第10轮测试\n\n**运维部署确认**（04:26:03）：\n- ✅ TEST环境已重新构建部署\n- ✅ 镜像ID：06d2dc403b9a（最新构建）\n- ✅ Nginx端口4100正常监听\n- ✅ API可访问性测试通过\n\n**第9轮测试失败原因已解决**：\n- 之前错误：`connect ECONNREFUSED 127.0.0.1:3102`\n- ",
+      "reason": "运维已完成TEST环境重新部署，QA需要立即执行第10轮测试验证最新修复效果，推动版本验收"
+    },
+    {
+      "timestamp": "2026-04-04T04:35:34.130429",
+      "source_group": "system-scheduler",
       "target_group": "ops-release-group",
       "target_group_name": "运维发布群",
       "mention_users": [
         "ops"
       ],
       "extracted_issues": [],
-      "message_content": "## 📋 部署状态更新\n\n### 当前状态\n- ❌ TEST环境部署失败（TypeScript类型错误）\n- ⏳ 已通知@fullstack-dev修复类型错误\n- 📦 等待修复完成后重新部署\n\n### 🔧 需要修复的错误\n```\nTS2322: Type 'Project | null' is not assignable to type 'Project'\n文件：src/modules/pro",
-      "reason": "ops需要了解当前部署阻塞状态，等待fullstack-dev修复类型错误后才能重新部署。"
+      "message_content": "[激活消息] ## 📋 部署准备通知\n\n**当前状态**：\n- TEST环境版本：commit 8ddec61\n- 第10轮测试通过率：59.31%\n\n**待部署代码**：\n- fullstack-dev正在本地修复，当前通过率68.4%\n- 等待fullstack-dev完成P0级BUG修复并提供自测结果\n\n*",
+      "reason": "[会话停止激活 stopReason=stop] 通知ops准备部署，但需等待开发完成修复"
     }
   ],
   "activation_attempts": {
-    "qa-acceptance-group:qa": {
-      "last_activation_time": "2026-04-02T22:00:49.047009"
-    },
     "dev-working-group:fullstack-dev": {
-      "last_activation_time": "2026-04-02T22:10:41.020452"
+      "count": 1,
+      "last_activity": "2026-04-03T20:01:14.916000+00:00"
     },
     "ops-release-group:ops": {
-      "last_activation_time": "2026-04-02T22:10:41.028130"
+      "count": 1,
+      "last_activity": "2026-04-03T20:01:09.907000+00:00"
     }
   },
   "token_anxiety_counts": {
     "token_anxiety:qa-acceptance-group:qa": 0,
     "token_anxiety:dev-working-group:architect": 1,
-    "token_anxiety:dev-working-group:fullstack-dev": 1
+    "token_anxiety:dev-working-group:fullstack-dev": 0
   }
 }
