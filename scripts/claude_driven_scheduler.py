@@ -242,6 +242,65 @@ class ClaudeDrivenScheduler:
         except Exception as e:
             logger.error(f"保存调度计划失败: {e}")
 
+    def _mark_milestone_in_progress(self, decision):
+        """通知发送后，标记对应里程碑为in_progress
+
+        精确匹配逻辑：
+        1. 找到状态为pending的里程碑
+        2. 检查assigned_to是否与@的user匹配
+        3. 验证该agent属于目标群
+        """
+        if not self.scheduling_plan or "milestones" not in self.scheduling_plan:
+            return
+
+        target_group = decision.target_group
+        mention_users = decision.mention_users or []
+
+        if not mention_users:
+            return
+
+        # 获取目标群的agent列表
+        target_group_agents = GROUPS.get(target_group, {}).get("agents", [])
+        target_group_agents_lower = [a.lower() for a in target_group_agents]
+
+        # 清理@用户名
+        mentioned_clean = [u.lstrip('@').lower() for u in mention_users]
+
+        updated = False
+        for milestone in self.scheduling_plan.get("milestones", []):
+            milestone_id = milestone.get("id", "")
+            name = milestone.get("name", "")
+            status = milestone.get("status", "")
+            assigned_to = milestone.get("assigned_to", "")
+
+            # 只处理pending状态的里程碑
+            if status != "pending":
+                continue
+
+            # 检查assigned_to是否与@的user精确匹配
+            if not assigned_to:
+                continue
+
+            assigned_clean = assigned_to.lstrip('@').lower()
+
+            # 精确匹配：assigned_to必须在@列表中
+            if assigned_clean not in mentioned_clean:
+                continue
+
+            # 验证该agent属于目标群
+            if assigned_clean not in target_group_agents_lower:
+                logger.debug(f"  ⏭ 里程碑 {milestone_id} 的 assigned_to '{assigned_to}' 不属于目标群 {target_group}")
+                continue
+
+            # 精确匹配成功，更新状态
+            milestone["status"] = "in_progress"
+            milestone["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            logger.info(f"  📋 已标记里程碑 {milestone_id} '{name}' 为 in_progress (assigned_to: {assigned_to})")
+            updated = True
+
+        if updated:
+            self._save_scheduling_plan()
+
     def _validate_and_correct_plan(self) -> bool:
         """验证并修正调度计划中的错误状态
 
@@ -2084,7 +2143,7 @@ data/bugs/TC-XXX_description.md
     def _quick_check_active_tasks(self, active_agents_by_group: Dict[str, List[str]]) -> tuple:
         """快速检查有活跃任务的agent
 
-        只拉取相关群的消息，进行快速决策
+        优化：收集所有工作群的agent最后2条消息，避免决策偏差
 
         Returns:
             (decisions, need_full_analysis, quick_session_status)
@@ -2092,10 +2151,11 @@ data/bugs/TC-XXX_description.md
         logger.info(f"\n🔍 第一阶段：快速检查活跃任务...")
         logger.info(f"  有活跃任务的群: {list(active_agents_by_group.keys())}")
 
-        # 只收集有活跃任务的群的消息
+        # 收集有活跃任务的群的消息
         quick_group_messages = {}
         quick_session_status = {}
 
+        # 1. 收集活跃任务群的消息
         for group_id, active_agents in active_agents_by_group.items():
             group_config = GROUPS.get(group_id, {})
             group_name = group_config.get("name", group_id)
@@ -2105,33 +2165,40 @@ data/bugs/TC-XXX_description.md
             messages = self.get_group_messages(channel_id) if channel_id else []
             quick_group_messages[group_id] = messages
 
-            # 检查agent会话状态
+            # 打印状态
+            logger.info(f"  📁 {group_name}: {len(messages)}条消息")
+
+        # 2. 收集所有工作群的agent会话状态（每个agent最后2条消息）
+        logger.info(f"  📋 收集所有工作群的agent会话状态...")
+        for group_id, group_config in GROUPS.items():
+            group_name = group_config.get("name", group_id)
+
+            # 检查agent会话状态（包含每个agent最后2条assistant消息）
             session_status = self.check_agent_session_status(group_id)
             quick_session_status[group_id] = session_status
 
-            # 打印状态
-            logger.info(f"  📁 {group_name}: {len(messages)}条消息")
-            for agent_name in active_agents:
-                # 找到对应agent的状态
-                for agent in session_status.get("agents", []):
-                    if agent.get("name") == agent_name:
-                        minutes_ago = agent.get("minutes_ago", 999)
-                        stop_reason = agent.get("stop_reason", "")
-                        is_timeout = agent.get("is_timeout", False)
+            # 打印有会话的agent状态
+            agents_with_session = [a for a in session_status.get("agents", []) if a.get("has_session")]
+            if agents_with_session:
+                logger.info(f"    📁 {group_name}:")
+                for agent in agents_with_session:
+                    agent_name = agent.get("name", "?")
+                    minutes_ago = agent.get("minutes_ago", 999)
+                    stop_reason = agent.get("stop_reason", "")
+                    is_timeout = agent.get("is_timeout", False)
+                    last_msgs = agent.get("last_assistant_messages", [])
 
-                        if is_timeout:
-                            status_icon = "⚠️ 超时"
-                        elif stop_reason in ("stop", "aborted", "error"):
-                            status_icon = f"🔴 {stop_reason}"
-                        elif stop_reason in ("endTurn", "toolUse"):
-                            status_icon = "🔄 活跃"
-                        elif stop_reason == "stop":
-                            status_icon = "⏹ 已停止"
-                        else:
-                            status_icon = "✅ 正常"
+                    if is_timeout:
+                        status_icon = "⚠️ 超时"
+                    elif stop_reason in ("stop", "aborted", "error"):
+                        status_icon = f"🔴 {stop_reason}"
+                    elif stop_reason in ("endTurn", "toolUse"):
+                        status_icon = "🔄 活跃"
+                    else:
+                        status_icon = "✅ 正常"
 
-                        logger.info(f"    👤 {agent_name}: {minutes_ago}分钟前 | {status_icon}")
-                        break
+                    msg_count = len(last_msgs)
+                    logger.info(f"      👤 {agent_name}: {minutes_ago}分钟前 | {status_icon} | {msg_count}条消息")
 
         # 判断是否需要完整分析
         need_full_analysis = False
@@ -2591,6 +2658,9 @@ data/bugs/TC-XXX_description.md
                 self.send_feishu_notification(decision)
                 notifications_sent += 1
                 notified_groups.add(decision.target_group)
+
+                # 标记对应里程碑为in_progress
+                self._mark_milestone_in_progress(decision)
 
                 # 记录历史
                 history = self.notification_history.setdefault("history", [])
