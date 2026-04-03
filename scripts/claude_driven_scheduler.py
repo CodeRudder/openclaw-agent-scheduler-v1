@@ -2085,6 +2085,76 @@ data/bugs/TC-XXX_description.md
 
         return None, need_full_analysis, quick_session_status, 0
 
+    def _run_full_analysis(self):
+        """进行全面分析，确定新的处理中任务（无活跃任务时调用）"""
+        logger.info(f"\n🔍 全面分析所有群消息...")
+
+        all_group_messages = {}
+        all_session_status = {}
+
+        for group_id, group_config in GROUPS.items():
+            group_name = group_config.get("name", group_id)
+            channel_id = group_config.get("channel_id", "")
+
+            messages = self.get_group_messages(channel_id) if channel_id else []
+            session_status = self.check_agent_session_status(group_id)
+
+            all_group_messages[group_id] = messages
+            all_session_status[group_id] = session_status
+
+            logger.info(f"  📁 {group_name}: {len(messages)}条消息")
+
+        total_msgs = sum(len(m) for m in all_group_messages.values())
+        logger.info(f"\n📊 完整消息收集: {total_msgs}条消息, {len(GROUPS)}个群")
+
+        # AI全面分析
+        logger.info(f"\n🧠 综合分析所有群消息...")
+        decisions, analysis, updated_plan = self.analyze_with_claude(
+            all_group_messages, all_session_status, self.notification_history,
+            self.scheduling_plan
+        )
+
+        # 更新调度计划
+        if updated_plan:
+            updated_plan["last_full_analysis_time"] = datetime.now().isoformat()
+            self.scheduling_plan = updated_plan
+            self._save_scheduling_plan()
+            logger.info(f"  📝 已更新调度计划")
+
+        # 输出分析报告
+        if analysis:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"📊 分析报告")
+            logger.info(f"{'='*60}")
+            if analysis.get("current_version"):
+                logger.info(f"  当前版本: {analysis['current_version']}")
+            if analysis.get("overall_progress"):
+                logger.info(f"  整体进度: {analysis['overall_progress']}")
+
+        # 输出调度计划更新
+        if updated_plan:
+            logger.info(f"\n  📋 调度计划更新:")
+            for m in updated_plan.get("milestones", []):
+                status_icon = {"completed": "✅", "in_progress": "🔄", "blocked": "🚧", "pending": "⏳"}.get(m.get("status", ""), "•")
+                logger.info(f"    {status_icon} {m.get('name')}: {m.get('status')} → @{m.get('assigned_to')}")
+
+        # 执行决策
+        notifications_sent = 0
+        if decisions:
+            logger.info(f"\n📋 调度决策: {len(decisions)}个")
+            for decision in decisions:
+                if self.send_mattermost_notification(decision):
+                    self.send_feishu_notification(decision)
+                    notifications_sent += 1
+
+        logger.info(f"\n{'=' * 70}")
+        logger.info(f"📊 调度总结:")
+        logger.info(f"  收集消息: {total_msgs}条")
+        logger.info(f"  调度决策: {len(decisions) if decisions else 0}个")
+        logger.info(f"  发送通知: {notifications_sent}个")
+        logger.info("=" * 70)
+        logger.info(f"🏁 调度结束 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
     def run(self):
         """执行调度 - 两阶段优化：先快速检查活跃任务，必要时再完整分析"""
         logger.info("=" * 70)
@@ -2095,7 +2165,9 @@ data/bugs/TC-XXX_description.md
         active_agents_by_group = self._get_active_task_agents()
 
         if not active_agents_by_group:
-            logger.info("📋 无处理中/阻塞任务，跳过调度")
+            # 无处理中任务，进行全面分析确定新任务
+            logger.info("📋 无处理中任务，进行全面分析确定下一步行动...")
+            self._run_full_analysis()
             return
 
         # 打印活跃任务信息
