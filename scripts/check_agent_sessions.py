@@ -283,6 +283,11 @@ def parse_read_result(content: str) -> dict:
 def find_edit_start_line(file_cache: dict, file_path: str, old_string: str) -> int:
     """在文件缓存中搜索 old_string 的起始行号
 
+    匹配策略（按优先级）：
+    1. 精确匹配：取前3行非空行，精确匹配
+    2. 宽松匹配：忽略空白和缩进差异
+    3. 单行匹配：只用第一行非空行匹配
+
     Args:
         file_cache: 文件内容缓存
         file_path: 文件路径
@@ -308,16 +313,55 @@ def find_edit_start_line(file_cache: dict, file_path: str, old_string: str) -> i
     if not old_lines:
         return 0
 
-    # 取前3行非空行作为匹配特征
+    # 策略1: 精确匹配（取前3行）
     pattern_lines = old_lines[:3]
+    result = _match_lines_in_file(file_lines, pattern_lines, exact=True)
+    if result > 0:
+        return result
 
-    # 在文件中搜索
-    for i in range(len(file_lines) - len(pattern_lines) + 1):
+    # 策略2: 宽松匹配（忽略空白差异）
+    result = _match_lines_in_file(file_lines, pattern_lines, exact=False)
+    if result > 0:
+        return result
+
+    # 策略3: 单行匹配（只用第一行）
+    if old_lines:
+        result = _match_lines_in_file(file_lines, [old_lines[0]], exact=False)
+        if result > 0:
+            return result
+
+    return 0
+
+
+def _match_lines_in_file(file_lines: list, pattern_lines: list, exact: bool = True) -> int:
+    """在文件行中搜索模式行
+
+    Args:
+        file_lines: 文件行列表 [(line_num, content), ...]
+        pattern_lines: 要匹配的模式行
+        exact: 是否精确匹配（False时忽略空白差异）
+
+    Returns:
+        起始行号，未找到返回 0
+    """
+    if not file_lines or not pattern_lines:
+        return 0
+
+    def normalize(s: str) -> str:
+        """规范化字符串用于比较"""
+        if exact:
+            return s.strip()
+        # 宽松匹配：移除所有空白
+        return ''.join(s.split())
+
+    pattern_normalized = [normalize(p) for p in pattern_lines]
+    pattern_len = len(pattern_lines)
+
+    for i in range(len(file_lines) - pattern_len + 1):
         match = True
-        for j, pattern in enumerate(pattern_lines):
+        for j, pattern in enumerate(pattern_normalized):
             cached_content = file_lines[i + j][1] if i + j < len(file_lines) else ""
-            # 比较时忽略首尾空白
-            if cached_content.strip() != pattern.strip():
+            if normalize(cached_content) != pattern:
                 match = False
                 break
         if match:
