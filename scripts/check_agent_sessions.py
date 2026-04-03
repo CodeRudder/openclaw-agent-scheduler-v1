@@ -48,7 +48,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 # Agent会话目录
-AGENTS_BASE = Path("/home/gongdewei/.openclaw/agents")
+AGENTS_BASE = Path.home() / ".openclaw" / "agents"
 
 # Claude项目目录
 CLAUDE_PROJECTS_BASE = Path.home() / ".claude" / "projects"
@@ -58,6 +58,11 @@ PROJECT_DIR = Path(__file__).parent.parent
 
 # Follow模式刷新间隔（秒）
 FOLLOW_INTERVAL = 2
+
+# ANSI 背景色（用于 diff 显示）
+BG_RED = "\033[48;5;52m"    # 暗红色背景
+BG_GREEN = "\033[48;5;22m"  # 暗绿色背景
+RESET = "\033[0m"
 
 # 工作群配置
 GROUPS = {
@@ -101,18 +106,15 @@ def get_claude_projects() -> list:
             continue
 
         # 从目录名提取可读项目名
-        # 例如: -home-gongdewei-work-projects-code-rudder-openclaw-agent-scheduler
+        # 例如: -home-user-work-projects-code-rudder-openclaw-agent-scheduler
         # -> code-rudder/openclaw-agent-scheduler
         dir_name = project_dir.name
         parts = dir_name.split('-')
-        # 过滤掉常见的home前缀
-        display_parts = []
-        skip = True
-        for part in parts:
-            if skip and part in ('home', 'gongdewei', 'work', 'projects'):
-                continue
-            skip = False
-            display_parts.append(part)
+        # 过滤掉home路径前缀（home/user/...），直到遇到非路径目录名
+        # 使用当前用户的home目录来判断需要跳过的段数
+        home_parts = str(Path.home()).strip('/').split('/')
+        skip_count = len(home_parts)  # e.g., ['home', 'gongdewei'] -> 2
+        display_parts = parts[skip_count:] if len(parts) > skip_count else parts
 
         display_name = '/'.join(display_parts) if display_parts else dir_name
         projects.append((dir_name, project_dir, display_name))
@@ -227,7 +229,7 @@ def list_all_agents(limit: int = 0) -> list:
 
 # ===== Follow模式 =====
 
-def follow_session(session_path: Path, count: int = 10):
+def follow_session(session_path: Path, count: int = 20):
     """Follow模式：持续监控会话新消息
 
     Args:
@@ -260,9 +262,6 @@ def follow_session(session_path: Path, count: int = 10):
             print_single_message(i, raw_msg)
         last_count = total
 
-    print("=" * 80)
-    print(f"📊 当前共 {total} 条消息， 等待新消息...")
-
     # 持续监控
     while True:
         time.sleep(FOLLOW_INTERVAL)
@@ -276,9 +275,35 @@ def follow_session(session_path: Path, count: int = 10):
             new_messages = messages[last_count:]
             for i, raw_msg in enumerate(new_messages, last_count + 1):
                 print_single_message(i, raw_msg)
-            print("-" * 40)
-            print(f"📊 共 {current_count} 条消息 (+{current_count - last_count})")
             last_count = current_count
+
+
+def print_raw_message(line_num: int, raw_msg: dict):
+    """打印原始JSON格式的消息"""
+    msg = raw_msg.get("message", {})
+    timestamp = raw_msg.get("timestamp")
+
+    # 格式化时间
+    time_str = ""
+    if timestamp:
+        try:
+            if isinstance(timestamp, (int, float)):
+                ts = datetime.fromtimestamp(timestamp / 1000)
+            else:
+                ts = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                if ts.tzinfo is not None:
+                    ts = ts.astimezone().replace(tzinfo=None)
+            time_str = ts.strftime('%H:%M:%S')
+        except:
+            time_str = str(timestamp)[:8] if timestamp else ""
+
+    role = msg.get("role", "?")
+    role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "🔧"
+
+    print(f"\n[{line_num}] {role_icon} {role} | ⏰ {time_str or '无时间'}")
+    raw_json = json.dumps(raw_msg, ensure_ascii=False, indent=2)
+    for line in raw_json.split('\n'):
+        print(f"    {line}")
 
 
 def print_single_message(line_num: int, raw_msg: dict):
@@ -288,7 +313,8 @@ def print_single_message(line_num: int, raw_msg: dict):
 
     role = msg.get("role", "?")
     content_raw = msg.get("content", "")
-    content = extract_content_full(content_raw, max_len=200)
+    stop_reason = msg.get("stopReason")
+    error_msg = msg.get("errorMessage")
 
     # 格式化时间
     time_str = ""
@@ -305,9 +331,268 @@ def print_single_message(line_num: int, raw_msg: dict):
             time_str = str(timestamp)[:8] if timestamp else ""
 
     role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "🔧"
-    print(f"\n[{line_num}] {role_icon} {role} | ⏰ {time_str or '无时间'}")
-    if content and content.strip():
-        print(f"    📝 {content}")
+
+    # 状态显示
+    status_str = ""
+    if stop_reason:
+        status_str = f" | {get_status_icon(stop_reason)}"
+    if error_msg:
+        status_str += f" ⚠️{error_msg[:50]}"
+
+    print(f"\n[{line_num}] {role_icon} {role} | ⏰ {time_str or '无时间'}{status_str}")
+
+    # 解析内容，区分思考和正文
+    if isinstance(content_raw, list):
+        for item in content_raw:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type", "")
+            if item_type == "thinking":
+                thinking = item.get("thinking", "")
+                if thinking:
+                    _print_content("💭 思考", thinking)
+            elif item_type == "text":
+                text = item.get("text", "")
+                if text and text.strip():
+                    _print_content("📝 内容", text)
+            elif item_type == "tool_use" or item_type == "toolUse":
+                name = item.get("name", "?")
+                inp = item.get("input", {})
+                if isinstance(inp, dict):
+                    if "command" in inp:
+                        # Bash 工具
+                        print(f"    🔧 [工具调用: {name}]")
+                        print(f"       💻 command: {inp['command'][:200]}")
+                    elif "file_path" in inp and "old_string" in inp:
+                        # Edit 工具 - unified diff 显示
+                        print(f"    🔧 [工具调用: {name}]")
+                        print(f"       📄 file: {inp['file_path']}")
+                        old_str = inp['old_string']
+                        new_str = inp.get('new_string', '')
+                        _print_edit_diff(old_str, new_str)
+                    elif "file_path" in inp:
+                        # Read/Write 等文件工具
+                        print(f"    🔧 [工具调用: {name}] {inp['file_path']}")
+                    elif "pattern" in inp:
+                        # Grep/Glob 等搜索工具
+                        print(f"    🔧 [工具调用: {name}] {inp['pattern']}")
+                    else:
+                        print(f"    🔧 [工具调用: {name}]")
+                else:
+                    print(f"    🔧 [工具调用: {name}]")
+            elif item_type == "tool_result" or item_type == "toolResult":
+                result = item.get("content", "")
+                if isinstance(result, str):
+                    _print_tool_result(result)
+                else:
+                    print(f"    📤 [工具结果]")
+    elif isinstance(content_raw, str):
+        content = extract_content_full(content_raw, max_len=0)
+        if content and content.strip():
+            _print_content("📝 内容", content)
+
+
+def _display_width(s: str) -> int:
+    """计算字符串的显示宽度（中文字符占2个宽度）"""
+    width = 0
+    for ch in s:
+        # CJK 字符范围（中文、日文、韩文等）占2个宽度
+        if '\u4e00' <= ch <= '\u9fff' or '\u3000' <= ch <= '\u303f' or '\uff00' <= ch <= '\uffef':
+            width += 2
+        elif ord(ch) > 127:
+            # 其他非ASCII字符也占2个宽度
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def _truncate_by_width(s: str, max_width: int, suffix: str = "...") -> str:
+    """按显示宽度截断字符串"""
+    width = 0
+    result = []
+    for ch in s:
+        ch_width = 2 if ord(ch) > 127 else 1
+        if width + ch_width > max_width:
+            break
+        result.append(ch)
+        width += ch_width
+    return ''.join(result) + suffix if width < _display_width(s) else ''.join(result)
+
+
+def _pad_to_width(s: str, target_width: int) -> str:
+    """填充字符串到目标显示宽度"""
+    current_width = _display_width(s)
+    if current_width >= target_width:
+        return s
+    return s + ' ' * (target_width - current_width)
+
+
+def _print_edit_diff(old_str: str, new_str: str, max_lines: int = 100):
+    """打印 Edit 工具的 unified diff
+
+    合并显示 old/new，三种状态：
+    - 未修改行：正常文字，注释用灰色
+    - 红色背景（全宽）：删除的行
+    - 绿色背景（全宽）：新增的行，注释用灰色
+    """
+    # ANSI 颜色 - 使用真彩色
+    BG_RED = '\033[48;2;70;15;10m'     # 红色背景
+    BG_GREEN = '\033[48;2;20;50;15m'   # 绿色背景
+    FG_GRAY = '\033[38;5;246m'         # 注释灰色文字（稍亮）
+    RESET = '\033[0m'
+
+    old_lines = old_str.split('\n') if old_str else []
+    new_lines = new_str.split('\n') if new_str else []
+
+    # 计算 diff（带行号）
+    diff_ops = _compute_diff_with_lines(old_lines, new_lines)
+
+    # 统计
+    removed = sum(1 for op in diff_ops if op[0] == 'del')
+    added = sum(1 for op in diff_ops if op[0] == 'add')
+    print(f"       📊 -{removed} +{added}")
+
+    # 限制显示行数
+    total_lines = len(diff_ops)
+    if total_lines > max_lines:
+        print(f"       (显示前{max_lines}行，共{total_lines}行)")
+        diff_ops = diff_ops[:max_lines]
+
+    # 获取终端宽度
+    import shutil
+    term_width = shutil.get_terminal_size((120, 24)).columns
+    # 左侧预留2字符，右侧预留1字符
+    left_margin = 2
+    right_margin = 1
+    content_width = term_width - left_margin - right_margin
+    prefix = " " * left_margin
+
+    # 显示 diff（带行号，对齐，考虑中文宽度）
+    for op, old_num, new_num, line in diff_ops:
+        if op == 'del':
+            line_num = f"{old_num:5d}"
+            # 内容：行号 - 内容，填充到页宽
+            inner = f"{line_num} - {line}"
+            display_w = _display_width(inner)
+            if display_w > content_width:
+                inner = _truncate_by_width(inner, content_width)
+                display_w = content_width
+            padding = content_width - display_w
+            print(f"{prefix}{BG_RED}{inner}{' ' * padding}{RESET}")
+        elif op == 'add':
+            line_num = f"{new_num:5d}"
+            # 检查是否是注释行
+            stripped = line.strip()
+            is_comment = stripped.startswith('#') or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*')
+            # 内容
+            prefix_part = f"{line_num} + "
+            prefix_width = _display_width(prefix_part)
+            max_line_width = content_width - prefix_width - 3  # 预留...的空间
+            display_w = _display_width(line)
+            if display_w > max_line_width:
+                line = _truncate_by_width(line, max_line_width)
+                display_w = _display_width(line)
+            display_w = _display_width(prefix_part + line)
+            padding = content_width - display_w
+            if is_comment:
+                # 只有注释文字用灰色，行号和+保持背景色
+                print(f"{prefix}{BG_GREEN}{prefix_part}{RESET}{BG_GREEN}{FG_GRAY}{line}{' ' * padding}{RESET}")
+            else:
+                inner_plain = prefix_part + line
+                print(f"{prefix}{BG_GREEN}{inner_plain}{' ' * padding}{RESET}")
+        else:
+            # keep 行：检查是否是注释行
+            line_num = f"{old_num:5d}"
+            stripped = line.strip()
+            is_comment = stripped.startswith('#') or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*')
+            prefix_part = f"{line_num}   "
+            prefix_width = _display_width(prefix_part)
+            max_line_width = content_width - prefix_width - 3
+            display_w = _display_width(line)
+            if display_w > max_line_width:
+                line = _truncate_by_width(line, max_line_width)
+            if is_comment:
+                # 只有注释文字用灰色，行号保持正常
+                print(f"{prefix}{prefix_part}{FG_GRAY}{line}{RESET}")
+            else:
+                inner = prefix_part + line
+                print(f"{prefix}{inner}")
+
+    if total_lines > max_lines:
+        print(f"       ... 省略 {total_lines - max_lines} 行 ...")
+
+
+def _compute_diff_with_lines(old_lines: list, new_lines: list) -> list:
+    """计算 diff 操作列表（带行号）
+
+    返回: [(op, old_num, new_num, line), ...]
+    op: 'keep' | 'del' | 'add'
+    old_num: 在 old 中的行号（1-based），删除行和保留行有值
+    new_num: 在 new 中的行号（1-based），新增行和保留行有值
+    """
+    m, n = len(old_lines), len(new_lines)
+
+    # 计算 LCS 长度矩阵
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if old_lines[i-1] == new_lines[j-1]:
+                dp[i][j] = dp[i-1][j-1] + 1
+            else:
+                dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+
+    # 回溯生成 diff（带行号）
+    diff = []
+    i, j = m, n
+    old_line = m
+    new_line = n
+
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and old_lines[i-1] == new_lines[j-1]:
+            diff.append(('keep', i, j, old_lines[i-1]))
+            i -= 1
+            j -= 1
+        elif j > 0 and (i == 0 or dp[i][j-1] >= dp[i-1][j]):
+            diff.append(('add', None, j, new_lines[j-1]))
+            j -= 1
+        else:
+            diff.append(('del', i, None, old_lines[i-1]))
+            i -= 1
+
+    diff.reverse()
+    return diff
+
+
+def _print_content(label: str, content: str):
+    """打印内容，超过4k时显示头2k+末尾2k"""
+    if len(content) > 4000:
+        head = content[:2000]
+        tail = content[-2000:]
+        print(f"    {label}:")
+        for line in head.split('\n'):
+            print(f"      {line}")
+        print(f"    ... 省略 {len(content) - 4000} 字符 ...")
+        for line in tail.split('\n'):
+            print(f"      {line}")
+    else:
+        print(f"    {label}:")
+        for line in content.split('\n'):
+            print(f"      {line}")
+
+
+def _print_tool_result(content: str, max_lines: int = 10):
+    """打印工具结果，最多显示10行"""
+    lines = content.split('\n')
+    total = len(lines)
+    print(f"    📤 工具结果 ({total}行):")
+    if total <= max_lines:
+        for line in lines:
+            print(f"      {line}")
+    else:
+        for line in lines[:max_lines]:
+            print(f"      {line}")
+        print(f"      ... 省略 {total - max_lines} 行 ...")
 
 
 def get_session_files(agent_name: str, include_backups: bool = False) -> list:
@@ -701,62 +986,14 @@ def show_session_file(session_path: str, count: int = 10, msg_format: str = "sum
         print("（无消息）")
         return
 
-    for line_num, raw_msg in sliced_msgs:
-        msg = raw_msg.get("message", {})
-        timestamp = raw_msg.get("timestamp")
-
-        role = msg.get("role", "?")
-        content_raw = msg.get("content", "")
-        content = extract_content_full(content_raw)
-        stop_reason = msg.get("stopReason")
-        error_msg = msg.get("errorMessage")
-        msg_type = raw_msg.get("type", "message")
-
-        # 格式化时间（转换为本地时间）
-        time_str = ""
-        if timestamp:
-            try:
-                if isinstance(timestamp, (int, float)):
-                    # 毫秒时间戳转本地时间
-                    ts = datetime.fromtimestamp(timestamp / 1000)
-                else:
-                    # ISO格式转本地时间
-                    ts = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                    # 如果有时区信息，转换为本地时间
-                    if ts.tzinfo is not None:
-                        ts = ts.astimezone().replace(tzinfo=None)
-                time_str = ts.strftime('%H:%M:%S')
-            except:
-                time_str = str(timestamp)[:8] if timestamp else ""
-
-        # 角色图标
-        role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "🔧" if role == "toolResult" else "❓"
-
-        # 消息类型
-        type_str = f"({msg_type})" if msg_type != "message" else ""
-
-        print(f"\n[{line_num}] {role_icon} {role} {type_str} | ⏰ {time_str or '无时间'}")
-
-        # 根据format参数决定显示内容
-        if msg_format in ("summary", "both"):
-            # 内容摘要
-            if content and content.strip():
-                print(f"    📝 摘要: {content}")
-            else:
-                print(f"    📝 摘要: (无内容)")
-
-        if msg_format in ("raw", "both"):
-            # 原始JSON格式 - 显示完整message对象（不截断）
-            raw_json = json.dumps(msg, ensure_ascii=False, indent=2)
-            print(f"    📦 原始JSON: {raw_json}")
-
-        # 显示停止原因
-        if stop_reason:
-            print(f"    ⏹ stopReason: {stop_reason}")
-
-        # 显示错误信息
-        if error_msg:
-            print(f"    ❌ error: {error_msg[:200]}")
+    # raw 格式显示原始 JSON
+    if msg_format == "raw":
+        for line_num, raw_msg in sliced_msgs:
+            print_raw_message(line_num, raw_msg)
+    else:
+        # summary/both 格式使用 follow 模式的渲染方式
+        for line_num, raw_msg in sliced_msgs:
+            print_single_message(line_num, raw_msg)
 
     print(f"\n{'=' * 80}")
     print(f"✅ 共显示 {len(sliced_msgs)} 条消息 / 共 {total_msgs} 条")
@@ -803,51 +1040,14 @@ def show_last_messages(agent_name: str, count: int = 10, msg_format: str = "summ
         print("（无消息）")
         return
 
-    for line_num, raw_msg in sliced_msgs:
-        msg = raw_msg.get("message", {})
-        timestamp = raw_msg.get("timestamp")
-
-        role = msg.get("role", "?")
-        content_raw = msg.get("content", "")
-        content = extract_content_full(content_raw)
-        stop_reason = msg.get("stopReason")
-        error_msg = msg.get("errorMessage")
-        msg_type = raw_msg.get("type", "message")
-
-        # 格式化时间（转换为本地时间）
-        time_str = ""
-        if timestamp:
-            try:
-                if isinstance(timestamp, (int, float)):
-                    ts = datetime.fromtimestamp(timestamp / 1000)
-                else:
-                    ts = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                    if ts.tzinfo is not None:
-                        ts = ts.astimezone().replace(tzinfo=None)
-                time_str = ts.strftime('%H:%M:%S')
-            except:
-                time_str = str(timestamp)[:8] if timestamp else ""
-
-        role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "🔧" if role == "toolResult" else "❓"
-        type_str = f"({msg_type})" if msg_type != "message" else ""
-
-        print(f"\n[{line_num}] {role_icon} {role} {type_str} | ⏰ {time_str or '无时间'}")
-
-        if msg_format in ("summary", "both"):
-            if content and content.strip():
-                print(f"    📝 摘要: {content}")
-            else:
-                print(f"    📝 摘要: (无内容)")
-
-        if msg_format in ("raw", "both"):
-            raw_json = json.dumps(msg, ensure_ascii=False, indent=2)
-            print(f"    📦 原始JSON: {raw_json}")
-
-        if stop_reason:
-            print(f"    ⏹ stopReason: {stop_reason}")
-
-        if error_msg:
-            print(f"    ❌ error: {error_msg[:200]}")
+    # raw 格式显示原始 JSON
+    if msg_format == "raw":
+        for line_num, raw_msg in sliced_msgs:
+            print_raw_message(line_num, raw_msg)
+    else:
+        # summary/both 格式使用 follow 模式的渲染方式
+        for line_num, raw_msg in sliced_msgs:
+            print_single_message(line_num, raw_msg)
 
     print(f"\n{'=' * 80}")
     print(f"✅ 共显示 {len(sliced_msgs)} 条消息 / 共 {total_msgs} 条")
@@ -920,7 +1120,9 @@ def extract_content_full(content, max_len: int = 500) -> str:
 
     if isinstance(content, str):
         content = clean_text(content)
-        return content[:max_len] + "..." if len(content) > max_len else content
+        if max_len > 0 and len(content) > max_len:
+            return content[:max_len] + "..."
+        return content
     elif isinstance(content, list):
         text_parts = []
         for item in content:
@@ -965,10 +1167,12 @@ def extract_content_full(content, max_len: int = 500) -> str:
             elif item_type == "thinking":
                 thinking = item.get("thinking", "")
                 if thinking:
-                    preview = thinking[:80].replace('\n', ' ')
-                    text_parts.append(f"[思考: {preview}...]")
+                    # follow模式不截断thinking，由print_single_message处理
+                    text_parts.append(f"[思考]\n{thinking}")
         full_text = "\n".join(text_parts)
-        return full_text[:max_len] + "..." if len(full_text) > max_len else full_text
+        if max_len > 0 and len(full_text) > max_len:
+            return full_text[:max_len] + "..."
+        return full_text
     return str(content)[:max_len]
 
 
@@ -1141,13 +1345,7 @@ def main():
 
         latest_session = sessions[0]
 
-        # --follow: Follow模式
-        if args.follow:
-            follow_session(latest_session, count=10)
-            return
-
-        # 显示会话内容
-        # 处理count参数
+        # 处理count参数（提前处理，供follow和show共用）
         head = args.head
         tail = args.tail
         use_head_tail = head > 0 or tail > 0
@@ -1165,6 +1363,13 @@ def main():
         else:
             count = 10 if not use_head_tail else 0
             from_line = args.from_line
+
+        # --follow: Follow模式
+        if args.follow:
+            follow_session(latest_session, count=count or 20)
+            return
+
+        # 显示会话内容
 
         show_session_file(str(latest_session), count, args.format, agent_name=None,
                          from_line=from_line, head=head, tail=tail)
@@ -1197,6 +1402,9 @@ def main():
     if args.session:
         session_path = Path(args.session)
         if session_path.exists() or session_path.is_absolute():
+            if args.follow:
+                follow_session(session_path, count=count or 20)
+                return
             show_session_file(args.session, count, args.format, agent_name=None,
                              from_line=from_line, head=head, tail=tail)
         else:
@@ -1204,6 +1412,13 @@ def main():
                 print("❌ 部分匹配模式需要指定agent名称")
                 print("用法: python3 scripts/check_agent_sessions.py <agent名> -s <uuid片段>")
                 print("或使用完整路径: python3 scripts/check_agent_sessions.py -s /full/path/to/session.jsonl")
+                return
+            if args.follow:
+                # 部分匹配时需要先找到完整路径
+                session_files = get_session_files(args.agent)
+                matched = find_session_by_partial(args.session, session_files)
+                if matched:
+                    follow_session(matched, count=count or 20)
                 return
             show_session_file(args.session, count, args.format, agent_name=args.agent,
                              from_line=from_line, head=head, tail=tail)
@@ -1220,12 +1435,23 @@ def main():
 
     # 如果指定了agent，显示该agent的详细消息
     if args.agent:
+        if args.follow:
+            # Follow模式：持续监控最新会话
+            session_files = get_session_files(args.agent)
+            if not session_files:
+                print(f"❌ Agent '{args.agent}' 无会话文件")
+                return
+            follow_session(session_files[0], count=count or 20)
+            return
         show_last_messages(args.agent, count, args.format, from_line=from_line, head=head, tail=tail)
         return
 
-    # 否则显示所有agent的状态概览
+    # 否则显示所有agent最新会话的最后N条消息
+    # 默认每个agent显示3条（概览模式，不要太多输出）
+    overview_count = count if count and count <= 20 else 3
+
     print("=" * 80)
-    print(f"📊 Agent会话状态检查 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"📊 Agent会话概览 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
 
     for group_id, group_config in GROUPS.items():
@@ -1234,45 +1460,52 @@ def main():
         print(f"{'─' * 60}")
 
         for agent_name in group_config["agents"]:
-            print(f"\n  👤 {agent_name}")
-
             session_files = get_session_files(agent_name)
 
             if not session_files:
-                print(f"     ❌ 无会话文件")
+                print(f"\n  👤 {agent_name}: ❌ 无会话文件")
                 continue
 
             # 只显示最新的会话文件
             latest_file = session_files[0]
             session_info = parse_session_file(latest_file)
 
-            # 文件路径（相对路径）
+            # 概览头部
+            stop_reason = session_info.get("stop_reason")
+            msg_count = len(session_info.get("messages", []))
             rel_path = latest_file.relative_to(AGENTS_BASE.parent) if AGENTS_BASE.parent in latest_file.parents else latest_file
+            print(f"\n  👤 {agent_name} | {format_time_ago(session_info['mtime'])} | {get_status_icon(stop_reason)} | {msg_count}条")
             print(f"     📄 {rel_path}")
 
-            # 活跃时间
-            print(f"     🕐 活跃: {format_time_ago(session_info['mtime'])}")
+            # 显示最后N条消息
+            raw_messages = session_info.get("raw_messages", [])
+            if raw_messages:
+                display_count = min(overview_count, len(raw_messages))
+                for i, raw_msg in enumerate(raw_messages[-display_count:], len(raw_messages) - display_count + 1):
+                    msg = raw_msg.get("message", {})
+                    role = msg.get("role", "?")
+                    content_raw = msg.get("content", "")
+                    content = extract_content_full(content_raw, max_len=150)
+                    timestamp = raw_msg.get("timestamp")
 
-            # 状态
-            stop_reason = session_info.get("stop_reason")
-            print(f"     📌 状态: {get_status_icon(stop_reason)}")
+                    # 格式化时间
+                    time_str = ""
+                    if timestamp:
+                        try:
+                            if isinstance(timestamp, (int, float)):
+                                ts = datetime.fromtimestamp(timestamp / 1000)
+                            else:
+                                ts = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                                if ts.tzinfo is not None:
+                                    ts = ts.astimezone().replace(tzinfo=None)
+                            time_str = ts.strftime('%H:%M:%S')
+                        except:
+                            pass
 
-            # 最后一条消息
-            if session_info.get("last_message"):
-                last_msg = session_info["last_message"]
-                role = last_msg.get("role", "?")
-                content = last_msg.get("content", "(空)")
-                error = last_msg.get("error_message")
-
-                role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "❓"
-                print(f"     {role_icon} 最后消息 [{role}]: {content}")
-
-                if error:
-                    print(f"     ⚠️ 错误: {error[:100]}")
-
-            # 消息数量
-            msg_count = len(session_info.get("messages", []))
-            print(f"     📊 消息数: {msg_count}")
+                    role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "🔧"
+                    # 截断过长的消息内容为单行
+                    content_line = content.replace('\n', ' ')[:120]
+                    print(f"     [{i}] {role_icon} {role} {time_str} | {content_line}")
 
     print(f"\n{'=' * 80}")
     print("✅ 检查完成")
