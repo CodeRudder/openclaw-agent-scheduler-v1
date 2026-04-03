@@ -352,7 +352,8 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
 
     role = msg.get("role", "?")
     content_raw = msg.get("content", "")
-    stop_reason = msg.get("stopReason")
+    # 兼容两种命名：stopReason (OpenClaw) 和 stop_reason (Claude)
+    stop_reason = msg.get("stopReason") or msg.get("stop_reason")
     error_msg = msg.get("errorMessage")
 
     # 格式化时间
@@ -813,13 +814,15 @@ def parse_session_file(file_path: Path) -> dict:
         # 获取最后一条消息
         if result["messages"]:
             last_msg = result["messages"][-1]
+            # 兼容两种命名：stopReason (OpenClaw) 和 stop_reason (Claude)
+            stop_reason = last_msg.get("stopReason") or last_msg.get("stop_reason")
             result["last_message"] = {
                 "role": last_msg.get("role", "?"),
                 "content": extract_content(last_msg.get("content", "")),
-                "stop_reason": last_msg.get("stopReason"),
+                "stop_reason": stop_reason,
                 "error_message": last_msg.get("errorMessage")
             }
-            result["stop_reason"] = last_msg.get("stopReason")
+            result["stop_reason"] = stop_reason
 
     except Exception as e:
         result["error"] = str(e)
@@ -860,19 +863,30 @@ def format_time_ago(dt: datetime) -> str:
 
 
 def get_status_icon(stop_reason: str) -> str:
-    """获取状态图标"""
+    """获取状态图标
+
+    兼容两种命名格式：
+    - OpenClaw Agent: endTurn, toolUse, stop, aborted, error
+    - Claude: end_turn, tool_use, stop_sequence, max_tokens
+    """
     if stop_reason is None:
         return "🔄 运行中"
-    elif stop_reason == "endTurn":
+
+    # 统一转换为小写并替换下划线为驼峰（用于比较）
+    stop_lower = stop_reason.lower()
+
+    if stop_lower in ("endturn", "end_turn"):
         return "✅ 正常结束"
-    elif stop_reason == "toolUse":
+    elif stop_lower in ("tooluse", "tool_use"):
         return "🔧 工具调用"
-    elif stop_reason == "stop":
+    elif stop_lower in ("stop", "stop_sequence"):
         return "⏹️ 主动停止"
-    elif stop_reason == "aborted":
+    elif stop_lower == "aborted":
         return "❌ 异常终止"
-    elif stop_reason == "error":
+    elif stop_lower == "error":
         return "🔴 错误"
+    elif stop_lower == "max_tokens":
+        return "⚠️ 达到长度限制"
     else:
         return f"❓ {stop_reason}"
 

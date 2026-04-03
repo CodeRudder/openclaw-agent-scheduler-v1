@@ -70,13 +70,13 @@ def make_agent_message(role: str, content: str, stop_reason: str = None,
 
 def make_claude_message(role: str, content: str, stop_reason: str = None,
                         timestamp: int = None) -> dict:
-    """创建Claude项目格式的消息行"""
+    """创建Claude项目格式的消息行（使用 stop_reason 下划线命名）"""
     return {
         "type": role,
         "timestamp": timestamp or int(datetime.now().timestamp() * 1000),
         "message": {
             "content": content,
-            "stopReason": stop_reason
+            "stop_reason": stop_reason  # Claude 使用下划线命名
         }
     }
 
@@ -272,16 +272,28 @@ class TestGetStatusIcon:
         assert "运行" in get_status_icon(None)
 
     def test_end_turn(self):
-        """正常结束"""
+        """正常结束 (OpenClaw格式)"""
         assert "正常" in get_status_icon("endTurn")
 
+    def test_end_turn_claude(self):
+        """正常结束 (Claude格式)"""
+        assert "正常" in get_status_icon("end_turn")
+
     def test_tool_use(self):
-        """工具调用"""
+        """工具调用 (OpenClaw格式)"""
         assert "工具" in get_status_icon("toolUse")
+
+    def test_tool_use_claude(self):
+        """工具调用 (Claude格式)"""
+        assert "工具" in get_status_icon("tool_use")
 
     def test_stop(self):
         """主动停止"""
         assert "停止" in get_status_icon("stop")
+
+    def test_stop_sequence_claude(self):
+        """主动停止 (Claude格式)"""
+        assert "停止" in get_status_icon("stop_sequence")
 
     def test_aborted(self):
         """异常终止"""
@@ -290,6 +302,10 @@ class TestGetStatusIcon:
     def test_error(self):
         """错误"""
         assert "错误" in get_status_icon("error")
+
+    def test_max_tokens_claude(self):
+        """达到长度限制 (Claude格式)"""
+        assert "长度限制" in get_status_icon("max_tokens")
 
     def test_unknown(self):
         """未知状态"""
