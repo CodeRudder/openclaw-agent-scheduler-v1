@@ -43,17 +43,21 @@
 import json
 import sys
 import argparse
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 
 # Agent会话目录
 AGENTS_BASE = Path("/home/gongdewei/.openclaw/agents")
 
+# Claude项目目录
+CLAUDE_PROJECTS_BASE = Path.home() / ".claude" / "projects"
+
 # 项目根目录
 PROJECT_DIR = Path(__file__).parent.parent
 
-# Agent会话目录
-AGENTS_BASE = Path("/home/gongdewei/.openclaw/agents")
+# Follow模式刷新间隔（秒）
+FOLLOW_INTERVAL = 2
 
 # 工作群配置
 GROUPS = {
@@ -74,6 +78,236 @@ GROUPS = {
         "agents": ["product", "ui-designer", "architect", "qa"]
     }
 }
+
+
+# ===== Claude项目相关函数 =====
+
+def get_claude_projects() -> list:
+    """获取所有Claude项目
+
+    Returns:
+        [(dir_name, dir_path, display_name), ...]
+        display_name: 从路径中提取的可读项目名
+    """
+    if not CLAUDE_PROJECTS_BASE.exists():
+        return []
+
+    projects = []
+    for project_dir in CLAUDE_PROJECTS_BASE.iterdir():
+        if not project_dir.is_dir():
+            continue
+        # 跳过隐藏目录
+        if project_dir.name.startswith('.'):
+            continue
+
+        # 从目录名提取可读项目名
+        # 例如: -home-gongdewei-work-projects-code-rudder-openclaw-agent-scheduler
+        # -> code-rudder/openclaw-agent-scheduler
+        dir_name = project_dir.name
+        parts = dir_name.split('-')
+        # 过滤掉常见的home前缀
+        display_parts = []
+        skip = True
+        for part in parts:
+            if skip and part in ('home', 'gongdewei', 'work', 'projects'):
+                continue
+            skip = False
+            display_parts.append(part)
+
+        display_name = '/'.join(display_parts) if display_parts else dir_name
+        projects.append((dir_name, project_dir, display_name))
+
+    return sorted(projects, key=lambda x: x[2])
+
+
+def find_claude_project(query: str) -> Path:
+    """根据项目名模糊匹配查找Claude项目
+
+    Args:
+        query: 项目名或部分项目名
+
+    Returns:
+        项目目录路径，未找到返回None
+    """
+    projects = get_claude_projects()
+
+    if not projects:
+        return None
+
+    # 先尝试精确匹配
+    for dir_name, dir_path, display_name in projects:
+        if query == dir_name or query == display_name:
+            return dir_path
+
+    # 再尝试模糊匹配
+    matches = []
+    for dir_name, dir_path, display_name in projects:
+        if query.lower() in dir_name.lower() or query.lower() in display_name.lower():
+            matches.append((dir_name, dir_path, display_name))
+
+    if len(matches) == 1:
+        return matches[0][1]
+
+    if len(matches) > 1:
+        print(f"⚠️ 找到 {len(matches)} 个匹配 '{query}' 的项目：")
+        for i, (dir_name, dir_path, display_name) in enumerate(matches, 1):
+            print(f"  [{i}] {display_name} ({dir_name})")
+        print(f"\n💡 请使用更精确的项目名")
+        return None
+
+    return None
+
+
+def get_claude_project_sessions(project_dir: Path) -> list:
+    """获取Claude项目的会话文件列表
+
+    Args:
+        project_dir: 项目目录路径
+
+    Returns:
+        会话文件路径列表，按修改时间倒序
+    """
+    if not project_dir.exists():
+        return []
+
+    # 查找所有.jsonl文件
+    files = list(project_dir.glob("*.jsonl"))
+
+    # 排除备份文件
+    files = [f for f in files if "backup" not in f.name.lower()]
+
+    return sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)
+
+
+# ===== OpenClaw Agent相关函数 =====
+
+def list_all_agents(limit: int = 0) -> list:
+    """列出所有OpenClaw agents
+
+    Args:
+        limit: 限制返回数量（0=全部）
+
+    Returns:
+        [(agent_name, session_count, latest_mtime), ...]
+    """
+    if not AGENTS_BASE.exists():
+        return []
+
+    agents = []
+    for agent_dir in AGENTS_BASE.iterdir():
+        if not agent_dir.is_dir():
+            continue
+
+        agent_name = agent_dir.name
+        sessions_dir = agent_dir / "sessions"
+
+        if not sessions_dir.exists():
+            continue
+
+        # 获取会话文件数量
+        session_files = get_session_files(agent_name)
+        session_count = len(session_files)
+
+        if session_count == 0:
+            continue
+
+        # 获取最新会话的修改时间
+        latest_mtime = session_files[0].stat().st_mtime
+
+        agents.append((agent_name, session_count, latest_mtime))
+
+    # 按最新修改时间排序
+    agents.sort(key=lambda x: x[2], reverse=True)
+
+    if limit > 0:
+        return agents[:limit]
+
+    return agents
+
+
+# ===== Follow模式 =====
+
+def follow_session(session_path: Path, count: int = 10):
+    """Follow模式：持续监控会话新消息
+
+    Args:
+        session_path: 会话文件路径
+        count: 显示最后N条消息（用于初始显示）
+    """
+    import signal
+
+    # 处理Ctrl+C
+    def signal_handler(sig, frame):
+        print("\n\n✅ 退出Follow模式")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    print(f"📡 Follow模式: {session_path}")
+    print(f"   每{FOLLOW_INTERVAL}秒刷新，按Ctrl+C退出")
+    print("=" * 80)
+
+    last_count = 0
+
+    # 首次显示最后count条消息
+    session_info = parse_session_file(session_path)
+    messages = session_info.get("raw_messages", [])
+    total = len(messages)
+
+    if total > 0:
+        display_count = min(count, total)
+        for i, raw_msg in enumerate(messages[-display_count:], total - display_count + 1):
+            print_single_message(i, raw_msg)
+        last_count = total
+
+    print("=" * 80)
+    print(f"📊 当前共 {total} 条消息， 等待新消息...")
+
+    # 持续监控
+    while True:
+        time.sleep(FOLLOW_INTERVAL)
+
+        session_info = parse_session_file(session_path)
+        messages = session_info.get("raw_messages", [])
+        current_count = len(messages)
+
+        if current_count > last_count:
+            # 只显示新增的消息
+            new_messages = messages[last_count:]
+            for i, raw_msg in enumerate(new_messages, last_count + 1):
+                print_single_message(i, raw_msg)
+            print("-" * 40)
+            print(f"📊 共 {current_count} 条消息 (+{current_count - last_count})")
+            last_count = current_count
+
+
+def print_single_message(line_num: int, raw_msg: dict):
+    """打印单条消息（用于Follow模式）"""
+    msg = raw_msg.get("message", {})
+    timestamp = raw_msg.get("timestamp")
+
+    role = msg.get("role", "?")
+    content_raw = msg.get("content", "")
+    content = extract_content_full(content_raw, max_len=200)
+
+    # 格式化时间
+    time_str = ""
+    if timestamp:
+        try:
+            if isinstance(timestamp, (int, float)):
+                ts = datetime.fromtimestamp(timestamp / 1000)
+            else:
+                ts = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                if ts.tzinfo is not None:
+                    ts = ts.astimezone().replace(tzinfo=None)
+            time_str = ts.strftime('%H:%M:%S')
+        except:
+            time_str = str(timestamp)[:8] if timestamp else ""
+
+    role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "🔧"
+    print(f"\n[{line_num}] {role_icon} {role} | ⏰ {time_str or '无时间'}")
+    if content and content.strip():
+        print(f"    📝 {content}")
 
 
 def get_session_files(agent_name: str, include_backups: bool = False) -> list:
@@ -740,25 +974,25 @@ def extract_content_full(content, max_len: int = 500) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="检查agent会话状态",
+        description="检查agent/Claude会话状态",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
+  # OpenClaw Agent
   %(prog)s                                    # 查看所有agent状态概览
+  %(prog)s --agents                           # 列出所有agent（详细信息）
+  %(prog)s --agents -n 5                      # 只列出前5个agent
   %(prog)s fullstack-dev                      # 查看agent最后10条消息
   %(prog)s fullstack-dev 20 -f raw            # 查看最后20条消息（原始JSON）
-  %(prog)s fullstack-dev -n 5                 # 查看最后5条消息
-  %(prog)s fullstack-dev -n 0                 # 查看全部消息
-  %(prog)s fullstack-dev --head 5             # 查看前5条
-  %(prog)s fullstack-dev --tail 20            # 查看后20条
-  %(prog)s fullstack-dev -H 3 -T 3            # 前3条+后3条
-  %(prog)s fullstack-dev --from 10 -n 5       # 从第10条开始，显示5条
-  %(prog)s fullstack-dev --from -20           # 从倒数第20条开始显示
+  %(prog)s fullstack-dev --follow             # Follow模式，持续监控新消息
   %(prog)s fullstack-dev --list               # 列出agent会话（默认第1页，10条）
-  %(prog)s fullstack-dev -l --page 2          # 列出第2页会话
-  %(prog)s fullstack-dev -l --page-size 20    # 每页20条
   %(prog)s fullstack-dev -s 5417ea64          # 通过UUID片段查看会话
-  %(prog)s -s /full/path/to/file.jsonl        # 完整路径查看会话
+
+  # Claude 项目
+  %(prog)s --claude                            # 列出所有Claude项目
+  %(prog)s -c openclaw-agent-scheduler         # 查看项目最新会话
+  %(prog)s -c openclaw-agent-scheduler -l      # 列出项目会话文件
+  %(prog)s -c openclaw-agent-scheduler --follow # Follow模式
 
 行定位说明:
   --head N / -H N  显示前N条
@@ -769,11 +1003,11 @@ def main():
     默认从第1条开始
         """
     )
-    parser.add_argument("agent", nargs="?", help="指定agent名称")
+    parser.add_argument("agent", nargs="?", help="指定agent名称或Claude项目名")
     parser.add_argument("count", nargs="?", type=int, default=None,
                         help="显示消息数量（默认10，0=全部）。也支持head/tail风格：-5=倒数5条")
     parser.add_argument("-n", "--num", type=int, dest="num",
-                        help="显示消息数量（覆盖count参数）")
+                        help="显示消息数量（覆盖count参数，也用于--agents限制数量）")
     parser.add_argument("--head", "-H", type=int, default=0, dest="head",
                         help="显示前N条")
     parser.add_argument("--tail", "-T", type=int, default=0, dest="tail",
@@ -782,11 +1016,161 @@ def main():
                         help="起始行号。正数=第N条(1-based)，负数=倒数第|N|条")
     parser.add_argument("--format", "-f", choices=["summary", "raw", "both"], default="summary",
                         help="消息显示格式: summary(摘要), raw(原始JSON), both(两者)")
-    parser.add_argument("--list", "-l", action="store_true", help="列出agent的所有会话文件")
+    parser.add_argument("--list", "-l", action="store_true", help="列出agent/项目的所有会话文件")
     parser.add_argument("--page", type=int, default=1, help="会话列表页码（默认1）")
     parser.add_argument("--page-size", type=int, default=10, help="每页会话数量（默认10）")
-    parser.add_argument("--session", "-s", type=str, help="查看指定会话文件（支持部分UUID匹配，需配合agent参数）")
+    parser.add_argument("--session", "-s", type=str, help="查看指定会话文件（支持部分UUID匹配）")
+
+    # 新增参数
+    parser.add_argument("--agents", "-A", action="store_true", help="列出所有OpenClaw agents")
+    parser.add_argument("--claude", "-c", nargs="?", const="", default=None, dest="claude",
+                        help="Claude项目模式。不指定项目时列出所有项目")
+    parser.add_argument("--follow", "-w", action="store_true", help="Follow模式，持续监控新消息（每2秒刷新）")
+
     args = parser.parse_args()
+
+    # ===== 新增功能处理 =====
+
+    # --agents: 列出所有OpenClaw agents
+    if args.agents:
+        limit = args.num if args.num else 0
+        agents = list_all_agents(limit)
+        if not agents:
+            print("❌ 未找到任何OpenClaw agent")
+            return
+
+        print("=" * 80)
+        print(f"📋 OpenClaw Agent 列表{'（前' + str(limit) + '个）' if limit else ''}")
+        print("=" * 80)
+
+        for i, (agent_name, session_count, latest_mtime) in enumerate(agents, 1):
+            mtime_str = datetime.fromtimestamp(latest_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            mtime_ago = format_time_ago(datetime.fromtimestamp(latest_mtime))
+            print(f"\n[{i}] 👤 {agent_name}")
+            print(f"    📊 会话数: {session_count}")
+            print(f"    🕐 最新: {mtime_str} ({mtime_ago})")
+
+        print(f"\n{'=' * 80}")
+        print(f"✅ 共 {len(agents)} 个agent")
+        print("💡 提示: 使用 '%(prog)s <agent名>' 查看详细消息")
+        return
+
+    # --claude: Claude项目模式
+    if args.claude is not None:
+        # 不指定项目名时，列出所有项目
+        if not args.claude:
+            projects = get_claude_projects()
+            if not projects:
+                print("❌ 未找到任何Claude项目")
+                print(f"💡 检查目录: {CLAUDE_PROJECTS_BASE}")
+                return
+
+            print("=" * 80)
+            print(f"📋 Claude 项目列表")
+            print("=" * 80)
+
+            for i, (dir_name, dir_path, display_name) in enumerate(projects, 1):
+                # 获取项目会话文件数量
+                sessions = get_claude_project_sessions(dir_path)
+                session_count = len(sessions)
+
+                # 获取最新会话的修改时间
+                if sessions:
+                    latest_mtime = datetime.fromtimestamp(sessions[0].stat().st_mtime)
+                    mtime_str = latest_mtime.strftime('%Y-%m-%d %H:%M:%S')
+                    mtime_ago = format_time_ago(latest_mtime)
+                else:
+                    mtime_str = "无会话"
+                    mtime_ago = ""
+
+                print(f"\n[{i}] 📁 {display_name}")
+                print(f"    📂 目录: {dir_name}")
+                print(f"    📊 会话数: {session_count}")
+                if mtime_ago:
+                    print(f"    🕐 最新: {mtime_str} ({mtime_ago})")
+
+            print(f"\n{'=' * 80}")
+            print(f"✅ 共 {len(projects)} 个项目")
+            print("💡 提示: 使用 '%(prog)s -c <项目名>' 查看项目会话")
+            return
+
+        # 指定项目名时，查找项目
+        project_dir = find_claude_project(args.claude)
+        if not project_dir:
+            return
+
+        # --list: 列出项目会话文件
+        if args.list:
+            sessions = get_claude_project_sessions(project_dir)
+            if not sessions:
+                print(f"❌ 项目 '{args.claude}' 无会话文件")
+                return
+
+            total = len(sessions)
+            total_pages = (total + args.page_size - 1) // args.page_size
+            start_idx = (args.page - 1) * args.page_size
+            end_idx = min(start_idx + args.page_size, total)
+            page_sessions = sessions[start_idx:end_idx]
+
+            print("=" * 80)
+            print(f"📋 Claude项目会话列表")
+            print(f"   项目: {project_dir.name}")
+            print(f"   共 {total} 个会话，当前第 {args.page}/{total_pages} 页")
+            print("=" * 80)
+
+            for i, session_file in enumerate(page_sessions, start_idx + 1):
+                mtime = datetime.fromtimestamp(session_file.stat().st_mtime)
+                size = session_file.stat().st_size
+                size_str = f"{size / 1024:.1f}KB" if size > 1024 else f"{size}B"
+
+                print(f"\n[{i}] 📄 {session_file.name}")
+                print(f"    🕐 修改: {mtime.strftime('%Y-%m-%d %H:%M:%S')} ({format_time_ago(mtime)})")
+                print(f"    📊 大小: {size_str}")
+
+            print(f"\n{'=' * 80}")
+            if args.page < total_pages:
+                print(f"📄 下一页: -c {args.claude} -l --page {args.page + 1}")
+            print(f"💡 查看会话: -c {args.claude} -s <session-id>")
+            return
+
+        # 获取最新会话文件
+        sessions = get_claude_project_sessions(project_dir)
+        if not sessions:
+            print(f"❌ 项目 '{args.claude}' 无会话文件")
+            return
+
+        latest_session = sessions[0]
+
+        # --follow: Follow模式
+        if args.follow:
+            follow_session(latest_session, count=10)
+            return
+
+        # 显示会话内容
+        # 处理count参数
+        head = args.head
+        tail = args.tail
+        use_head_tail = head > 0 or tail > 0
+
+        if args.num is not None:
+            count = args.num
+            from_line = args.from_line
+        elif args.count is not None:
+            if args.count < 0:
+                from_line = args.count
+                count = 0
+            else:
+                count = args.count
+                from_line = args.from_line
+        else:
+            count = 10 if not use_head_tail else 0
+            from_line = args.from_line
+
+        show_session_file(str(latest_session), count, args.format, agent_name=None,
+                         from_line=from_line, head=head, tail=tail)
+        return
+
+    # ===== 原有功能处理 =====
 
     # 处理 --head / --tail 参数（优先于 from_line 模式）
     head = args.head
