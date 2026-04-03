@@ -47,6 +47,15 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 
+# 导入文件行号缓存模块
+try:
+    from file_line_cache import parse_read_result, find_edit_start_line
+except ImportError:
+    # 兼容直接运行的情况
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+    from scripts.file_line_cache import parse_read_result, find_edit_start_line
+
 # Agent会话目录
 AGENTS_BASE = Path.home() / ".openclaw" / "agents"
 
@@ -227,147 +236,8 @@ def list_all_agents(limit: int = 0) -> list:
     return agents
 
 
-# ===== 文件内容缓存（用于Edit真实行号）=====
-
-def parse_read_result(content: str) -> dict:
-    """解析Read工具的结果，提取文件内容
-
-    Returns:
-        {file_path: [(line_num, line_content), ...]}
-    """
-    result = {}
-    if not content or not isinstance(content, str):
-        return result
-
-    # 常见格式：
-    # 1. 带行号: "     1→def hello():" 或 "     1│def hello():"
-    # 2. 带行号: "    10 | content"
-    # 3. 无行号: 直接文件内容
-
-    lines = content.split('\n')
-    current_file = None
-    file_lines = []
-
-    import re
-    # 匹配带行号的格式
-    line_pattern = re.compile(r'^\s*(\d+)\s*[→│|]\s*(.*)$')
-
-    for line in lines:
-        # 检测文件路径标记（通常在开头）
-        # 如 "Contents of file.py:" 或 "→ file.py"
-        file_match = re.match(r'^(?:→\s*)?(.+\.py):$', line.strip())
-        if file_match:
-            if current_file and file_lines:
-                result[current_file] = file_lines
-            current_file = file_match.group(1)
-            file_lines = []
-            continue
-
-        # 尝试解析带行号的行
-        match = line_pattern.match(line)
-        if match:
-            line_num = int(match.group(1))
-            line_content = match.group(2)
-            file_lines.append((line_num, line_content))
-        elif current_file is not None and line.strip():
-            # 无行号但有内容，跳过（可能是分隔符等）
-            pass
-
-    # 保存最后一个文件
-    if current_file and file_lines:
-        result[current_file] = file_lines
-
-    return result
-
-
-def find_edit_start_line(file_cache: dict, file_path: str, old_string: str) -> int:
-    """在文件缓存中搜索 old_string 的起始行号
-
-    匹配策略（按优先级）：
-    1. 精确匹配：取前3行非空行，精确匹配
-    2. 宽松匹配：忽略空白和缩进差异
-    3. 单行匹配：只用第一行非空行匹配
-
-    Args:
-        file_cache: 文件内容缓存
-        file_path: 文件路径
-        old_string: 要替换的旧内容
-
-    Returns:
-        起始行号，未找到返回 0
-    """
-    if not old_string or not file_path:
-        return 0
-
-    # 尝试多种文件路径匹配
-    file_lines = None
-    for cached_path in file_cache:
-        if file_path in cached_path or cached_path in file_path:
-            file_lines = file_cache[cached_path]
-            break
-
-    if not file_lines:
-        return 0
-
-    old_lines = [l for l in old_string.split('\n') if l.strip()]
-    if not old_lines:
-        return 0
-
-    # 策略1: 精确匹配（取前3行）
-    pattern_lines = old_lines[:3]
-    result = _match_lines_in_file(file_lines, pattern_lines, exact=True)
-    if result > 0:
-        return result
-
-    # 策略2: 宽松匹配（忽略空白差异）
-    result = _match_lines_in_file(file_lines, pattern_lines, exact=False)
-    if result > 0:
-        return result
-
-    # 策略3: 单行匹配（只用第一行）
-    if old_lines:
-        result = _match_lines_in_file(file_lines, [old_lines[0]], exact=False)
-        if result > 0:
-            return result
-
-    return 0
-
-
-def _match_lines_in_file(file_lines: list, pattern_lines: list, exact: bool = True) -> int:
-    """在文件行中搜索模式行
-
-    Args:
-        file_lines: 文件行列表 [(line_num, content), ...]
-        pattern_lines: 要匹配的模式行
-        exact: 是否精确匹配（False时忽略空白差异）
-
-    Returns:
-        起始行号，未找到返回 0
-    """
-    if not file_lines or not pattern_lines:
-        return 0
-
-    def normalize(s: str) -> str:
-        """规范化字符串用于比较"""
-        if exact:
-            return s.strip()
-        # 宽松匹配：移除所有空白
-        return ''.join(s.split())
-
-    pattern_normalized = [normalize(p) for p in pattern_lines]
-    pattern_len = len(pattern_lines)
-
-    for i in range(len(file_lines) - pattern_len + 1):
-        match = True
-        for j, pattern in enumerate(pattern_normalized):
-            cached_content = file_lines[i + j][1] if i + j < len(file_lines) else ""
-            if normalize(cached_content) != pattern:
-                match = False
-                break
-        if match:
-            return file_lines[i][0]
-
-    return 0
+# ===== 文件内容缓存（由 file_line_cache.py 模块提供）=====
+# parse_read_result 和 find_edit_start_line 已从 file_line_cache 模块导入
 
 
 # ===== Follow模式 =====
