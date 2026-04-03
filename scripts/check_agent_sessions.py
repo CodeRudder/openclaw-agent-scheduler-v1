@@ -9,7 +9,14 @@
   # 查看指定agent的最新会话消息
   python3 scripts/check_agent_sessions.py fullstack-dev           # 最后10条消息（摘要格式）
   python3 scripts/check_agent_sessions.py fullstack-dev 20        # 最后20条消息
-  python3 scripts/check_agent_sessions.py fullstack-dev 10 -f raw # 原始JSON格式
+  python3 scripts/check_agent_sessions.py fullstack-dev -n 5      # 最后5条消息
+  python3 scripts/check_agent_sessions.py fullstack-dev -n 0      # 全部消息
+
+  # 行定位（head/tail风格）
+  python3 scripts/check_agent_sessions.py fullstack-dev --skip 5 -n 10  # 从第6条开始，显示10条
+  python3 scripts/check_agent_sessions.py fullstack-dev --skip -20      # 从倒数第20条开始
+  python3 scripts/check_agent_sessions.py fullstack-dev -S -5           # 同上（简写）
+  python3 scripts/check_agent_sessions.py fullstack-dev -5              # head/tail风格：最后5条
 
   # 列出agent的所有会话
   python3 scripts/check_agent_sessions.py fullstack-dev --list
@@ -24,6 +31,10 @@
   summary - 内容摘要（默认）
   raw     - 原始JSON格式
   both    - 摘要和原始都显示
+
+行定位参数：
+  -n, --num N    显示N条消息（0=全部）
+  --skip, -S N   跳过前N条（N>0）或从倒数第|N|条开始（N<0）
 """
 
 import json
@@ -330,14 +341,47 @@ def find_session_by_partial(agent_name: str, partial: str, include_backups: bool
     return None
 
 
-def show_session_file(session_path: str, count: int = 10, msg_format: str = "summary", agent_name: str = None):
+def _slice_messages(raw_messages: list, count: int, skip: int) -> tuple:
+    """根据count和skip参数切片消息列表
+
+    Args:
+        raw_messages: 全部消息列表
+        count: 显示数量（0=全部）
+        skip: 跳过数量。正数=从头跳过N条，负数=从倒数第|N|条开始
+
+    Returns:
+        (sliced_messages, start_index) 切片后的消息和起始序号
+    """
+    total = len(raw_messages)
+    if total == 0:
+        return [], 0
+
+    if skip > 0:
+        # 从头跳过N条
+        start = skip
+    elif skip < 0:
+        # 从倒数第|N|条开始
+        start = max(0, total + skip)
+    else:
+        start = 0
+
+    if start >= total:
+        return [], start
+
+    end = total if count <= 0 else min(start + count, total)
+    return raw_messages[start:end], start
+
+
+def show_session_file(session_path: str, count: int = 10, msg_format: str = "summary",
+                      agent_name: str = None, skip: int = 0):
     """显示指定会话文件的内容
 
     Args:
         session_path: 会话文件路径或部分匹配字符串
-        count: 显示消息数量
+        count: 显示消息数量（0=全部）
         msg_format: 消息格式
         agent_name: 如果提供，则使用部分匹配查找
+        skip: 跳过数量。正数=从头跳过，负数=从倒数第|N|条开始
     """
     # 如果提供了agent_name，尝试部分匹配（包含备份文件）
     if agent_name:
@@ -355,23 +399,35 @@ def show_session_file(session_path: str, count: int = 10, msg_format: str = "sum
 
     session_info = parse_session_file(file_path)
 
+    raw_messages = session_info.get("raw_messages", [])
+    total_msgs = len(raw_messages)
+
+    # 切片消息
+    display_msgs, start_idx = _slice_messages(raw_messages, count, skip)
+
+    # 定位描述
+    if skip > 0:
+        range_desc = f"第{skip + 1}-{start_idx + len(display_msgs)}条"
+    elif skip < 0:
+        range_desc = f"倒数第{abs(skip)}条起"
+    elif count > 0:
+        range_desc = f"最后{count}条"
+    else:
+        range_desc = "全部"
+
     print("=" * 80)
     print(f"📄 会话文件: {file_path}")
     print(f"🕐 修改: {session_info['mtime'].strftime('%Y-%m-%d %H:%M:%S')} ({format_time_ago(session_info['mtime'])})")
     print(f"📌 状态: {get_status_icon(session_info.get('stop_reason'))}")
     print(f"📝 格式: {msg_format}")
+    print(f"📊 范围: {range_desc}（共 {total_msgs} 条）")
     print("=" * 80)
 
-    raw_messages = session_info.get("raw_messages", [])
-    if not raw_messages:
+    if not display_msgs:
         print("（无消息）")
         return
 
-    total_msgs = len(raw_messages)
-    # 取最后n条
-    last_msgs = raw_messages[-count:] if len(raw_messages) > count else raw_messages
-
-    for i, raw_msg in enumerate(last_msgs, 1):
+    for i, raw_msg in enumerate(display_msgs):
         msg = raw_msg.get("message", {})
         timestamp = raw_msg.get("timestamp")
 
@@ -429,16 +485,18 @@ def show_session_file(session_path: str, count: int = 10, msg_format: str = "sum
             print(f"    ❌ error: {error_msg[:200]}")
 
     print(f"\n{'=' * 80}")
-    print(f"✅ 共显示 {len(last_msgs)} 条消息（总共 {total_msgs} 条）")
+    print(f"✅ 共显示 {len(display_msgs)} 条消息（总共 {total_msgs} 条）")
 
 
-def show_last_messages(agent_name: str, count: int = 10, msg_format: str = "summary"):
-    """显示指定agent的最后n条消息
+def show_last_messages(agent_name: str, count: int = 10, msg_format: str = "summary",
+                       skip: int = 0):
+    """显示指定agent的消息
 
     Args:
         agent_name: agent名称
-        count: 显示消息数量
+        count: 显示消息数量（0=全部）
         msg_format: 消息格式 (summary/raw/both)
+        skip: 跳过数量。正数=从头跳过，负数=从倒数第|N|条开始
     """
     session_files = get_session_files(agent_name)
 
@@ -449,23 +507,36 @@ def show_last_messages(agent_name: str, count: int = 10, msg_format: str = "summ
     latest_file = session_files[0]
     session_info = parse_session_file(latest_file)
 
+    raw_messages = session_info.get("raw_messages", [])
+    total_msgs = len(raw_messages)
+
+    # 切片消息
+    display_msgs, start_idx = _slice_messages(raw_messages, count, skip)
+
+    # 定位描述
+    if skip > 0:
+        range_desc = f"第{skip + 1}-{start_idx + len(display_msgs)}条"
+    elif skip < 0:
+        range_desc = f"倒数第{abs(skip)}条起"
+    elif count > 0:
+        range_desc = f"最后{count}条"
+    else:
+        range_desc = "全部"
+
     print("=" * 80)
-    print(f"📋 {agent_name} 最后 {count} 条消息")
-    print(f"📄 会话文件: {latest_file}")  # 显示绝对路径
+    print(f"📋 {agent_name} 消息 [{range_desc}]")
+    print(f"📄 会话文件: {latest_file}")
     print(f"🕐 活跃: {format_time_ago(session_info['mtime'])}")
     print(f"📌 状态: {get_status_icon(session_info.get('stop_reason'))}")
     print(f"📝 格式: {msg_format}")
+    print(f"📊 范围: {range_desc}（共 {total_msgs} 条）")
     print("=" * 80)
 
-    raw_messages = session_info.get("raw_messages", [])
-    if not raw_messages:
+    if not display_msgs:
         print("（无消息）")
         return
 
-    # 取最后n条
-    last_msgs = raw_messages[-count:] if len(raw_messages) > count else raw_messages
-
-    for i, raw_msg in enumerate(last_msgs, 1):
+    for i, raw_msg in enumerate(display_msgs):
         msg = raw_msg.get("message", {})
         timestamp = raw_msg.get("timestamp")
 
@@ -481,49 +552,38 @@ def show_last_messages(agent_name: str, count: int = 10, msg_format: str = "summ
         if timestamp:
             try:
                 if isinstance(timestamp, (int, float)):
-                    # 毫秒时间戳转本地时间
                     ts = datetime.fromtimestamp(timestamp / 1000)
                 else:
-                    # ISO格式转本地时间
                     ts = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                    # 如果有时区信息，转换为本地时间
                     if ts.tzinfo is not None:
                         ts = ts.astimezone().replace(tzinfo=None)
                 time_str = ts.strftime('%H:%M:%S')
             except:
                 time_str = str(timestamp)[:8] if timestamp else ""
 
-        # 角色图标
         role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "🔧" if role == "toolResult" else "❓"
-
-        # 消息类型
         type_str = f"({msg_type})" if msg_type != "message" else ""
 
-        print(f"\n[{i}] {role_icon} {role} {type_str} | ⏰ {time_str or '无时间'}")
+        print(f"\n[{start_idx + i + 1}] {role_icon} {role} {type_str} | ⏰ {time_str or '无时间'}")
 
-        # 根据format参数决定显示内容
         if msg_format in ("summary", "both"):
-            # 内容摘要
             if content and content.strip():
                 print(f"    📝 摘要: {content}")
             else:
                 print(f"    📝 摘要: (无内容)")
 
         if msg_format in ("raw", "both"):
-            # 原始JSON格式 - 显示完整message对象（不截断）
             raw_json = json.dumps(msg, ensure_ascii=False, indent=2)
             print(f"    📦 原始JSON: {raw_json}")
 
-        # 显示停止原因
         if stop_reason:
             print(f"    ⏹ stopReason: {stop_reason}")
 
-        # 显示错误信息
         if error_msg:
             print(f"    ❌ error: {error_msg[:200]}")
 
     print(f"\n{'=' * 80}")
-    print(f"✅ 共显示 {len(last_msgs)} 条消息（总共 {len(raw_messages)} 条）")
+    print(f"✅ 共显示 {len(display_msgs)} 条消息（总共 {total_msgs} 条）")
 
 
 def extract_content_full(content, max_len: int = 500) -> str:
@@ -654,15 +714,31 @@ def main():
   %(prog)s                                    # 查看所有agent状态概览
   %(prog)s fullstack-dev                      # 查看agent最后10条消息
   %(prog)s fullstack-dev 20 -f raw            # 查看最后20条消息（原始JSON）
+  %(prog)s fullstack-dev -n 5                 # 查看最后5条消息
+  %(prog)s fullstack-dev -n 0                 # 查看全部消息
+  %(prog)s fullstack-dev --skip 5 -n 10       # 从第6条开始，显示10条
+  %(prog)s fullstack-dev --skip -20           # 从倒数第20条开始显示
+  %(prog)s fullstack-dev -S -5                # 同上（简写）
   %(prog)s fullstack-dev --list               # 列出agent会话（默认第1页，10条）
   %(prog)s fullstack-dev -l --page 2          # 列出第2页会话
   %(prog)s fullstack-dev -l --page-size 20    # 每页20条
   %(prog)s fullstack-dev -s 5417ea64          # 通过UUID片段查看会话
   %(prog)s -s /full/path/to/file.jsonl        # 完整路径查看会话
+
+行定位说明:
+  --skip N 或 -S N
+    N > 0: 从第N+1条开始（跳过前N条）
+    N < 0: 从倒数第|N|条开始（类似tail -n +N）
+    N = 0: 从第1条开始
         """
     )
     parser.add_argument("agent", nargs="?", help="指定agent名称")
-    parser.add_argument("count", nargs="?", type=int, default=10, help="显示最后N条消息（默认10）")
+    parser.add_argument("count", nargs="?", type=int, default=None,
+                        help="显示消息数量（默认10，0=全部）。也支持head/tail风格：-5=倒数5条")
+    parser.add_argument("-n", "--num", type=int, dest="num",
+                        help="显示消息数量（覆盖count参数）")
+    parser.add_argument("--skip", "-S", type=int, default=0,
+                        help="跳过消息数。正数=从头跳过N条，负数=从倒数第|N|条开始")
     parser.add_argument("--format", "-f", choices=["summary", "raw", "both"], default="summary",
                         help="消息显示格式: summary(摘要), raw(原始JSON), both(两者)")
     parser.add_argument("--list", "-l", action="store_true", help="列出agent的所有会话文件")
@@ -671,21 +747,35 @@ def main():
     parser.add_argument("--session", "-s", type=str, help="查看指定会话文件（支持部分UUID匹配，需配合agent参数）")
     args = parser.parse_args()
 
+    # 处理count参数（支持负数表示从倒数开始）
+    if args.num is not None:
+        # -n 参数优先
+        count = args.num
+        skip = args.skip
+    elif args.count is not None:
+        if args.count < 0:
+            # head/tail风格：-5 表示从倒数第5条开始
+            skip = args.count
+            count = 0  # 显示到末尾
+        else:
+            count = args.count
+            skip = args.skip
+    else:
+        count = 10  # 默认显示10条
+        skip = args.skip
+
     # 查看指定会话文件
     if args.session:
-        # 判断是否是完整路径
         session_path = Path(args.session)
         if session_path.exists() or session_path.is_absolute():
-            # 完整路径模式
-            show_session_file(args.session, args.count, args.format, agent_name=None)
+            show_session_file(args.session, count, args.format, agent_name=None, skip=skip)
         else:
-            # 部分匹配模式，需要agent参数
             if not args.agent:
                 print("❌ 部分匹配模式需要指定agent名称")
                 print("用法: python3 scripts/check_agent_sessions.py <agent名> -s <uuid片段>")
                 print("或使用完整路径: python3 scripts/check_agent_sessions.py -s /full/path/to/session.jsonl")
                 return
-            show_session_file(args.session, args.count, args.format, agent_name=args.agent)
+            show_session_file(args.session, count, args.format, agent_name=args.agent, skip=skip)
         return
 
     # 列出agent的所有会话
@@ -699,7 +789,7 @@ def main():
 
     # 如果指定了agent，显示该agent的详细消息
     if args.agent:
-        show_last_messages(args.agent, args.count, args.format)
+        show_last_messages(args.agent, count, args.format, skip=skip)
         return
 
     # 否则显示所有agent的状态概览
@@ -755,7 +845,7 @@ def main():
 
     print(f"\n{'=' * 80}")
     print("✅ 检查完成")
-    print("💡 提示: 使用 'python3 scripts/check_agent_sessions.py <agent名> [数量] [-f summary|raw|both]' 查看详细消息")
+    print("💡 提示: 使用 '%(prog)s <agent名> [-n 数量] [--skip N] [-f summary|raw|both]' 查看详细消息")
 
 
 if __name__ == "__main__":
