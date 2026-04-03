@@ -60,6 +60,7 @@ def parse_session_file(file_path: Path) -> dict:
         "file": str(file_path),
         "mtime": datetime.fromtimestamp(file_path.stat().st_mtime),
         "messages": [],
+        "raw_messages": [],  # 保存原始消息（包含时间戳）
         "last_message": None,
         "stop_reason": None
     }
@@ -73,7 +74,13 @@ def parse_session_file(file_path: Path) -> dict:
                 try:
                     msg = json.loads(line)
                     if msg.get("type") == "message":
-                        result["messages"].append(msg.get("message", {}))
+                        message = msg.get("message", {})
+                        result["messages"].append(message)
+                        # 保存原始消息（包含时间戳等元信息）
+                        result["raw_messages"].append({
+                            "timestamp": msg.get("timestamp"),
+                            "message": message
+                        })
                 except json.JSONDecodeError:
                     continue
 
@@ -162,27 +169,83 @@ def show_last_messages(agent_name: str, count: int = 10):
     print(f"📌 状态: {get_status_icon(session_info.get('stop_reason'))}")
     print("=" * 80)
 
-    messages = session_info.get("messages", [])
-    if not messages:
+    raw_messages = session_info.get("raw_messages", [])
+    if not raw_messages:
         print("（无消息）")
         return
 
     # 取最后n条
-    last_msgs = messages[-count:] if len(messages) > count else messages
+    last_msgs = raw_messages[-count:] if len(raw_messages) > count else raw_messages
 
-    for i, msg in enumerate(last_msgs, 1):
+    for i, raw_msg in enumerate(last_msgs, 1):
+        msg = raw_msg.get("message", {})
+        timestamp = raw_msg.get("timestamp")
+
         role = msg.get("role", "?")
-        content = extract_content_full(msg.get("content", ""))
+        content_raw = msg.get("content", "")
+        content = extract_content_full(content_raw)
         stop_reason = msg.get("stopReason")
+        error_msg = msg.get("errorMessage")
+        msg_type = raw_msg.get("type", "message")
 
-        role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "❓"
-        print(f"\n[{i}] {role_icon} {role}")
+        # 格式化时间
+        time_str = ""
+        if timestamp:
+            try:
+                if isinstance(timestamp, (int, float)):
+                    ts = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+                else:
+                    ts = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                time_str = ts.strftime('%H:%M:%S')
+            except:
+                time_str = str(timestamp)[:8] if timestamp else ""
+
+        # 角色图标
+        role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "🔧" if role == "toolResult" else "❓"
+
+        # 消息类型
+        type_str = f"({msg_type})" if msg_type != "message" else ""
+
+        print(f"\n[{i}] {role_icon} {role} {type_str} | ⏰ {time_str or '无时间'}")
+
+        # 内容摘要
+        if content and content.strip():
+            print(f"    📝 摘要: {content}")
+        else:
+            print(f"    📝 摘要: (无内容)")
+
+        # 原始内容（简化显示）
+        if content_raw:
+            if isinstance(content_raw, str):
+                raw_preview = content_raw[:150] + "..." if len(content_raw) > 150 else content_raw
+            elif isinstance(content_raw, list):
+                # 提取工具调用等关键信息
+                parts = []
+                for item in content_raw[:3]:  # 只看前3个
+                    if isinstance(item, dict):
+                        item_type = item.get("type", "?")
+                        if item_type == "text":
+                            text = item.get("text", "")[:50]
+                            parts.append(f"text: {text}...")
+                        elif item_type == "toolUse":
+                            parts.append(f"toolUse: {item.get('name', '?')}")
+                        elif item_type == "toolResult":
+                            parts.append(f"toolResult: {item.get('toolUseId', '?')[:8]}...")
+                raw_preview = " | ".join(parts) if parts else str(content_raw)[:150]
+            else:
+                raw_preview = str(content_raw)[:150]
+            print(f"    📦 原始: {raw_preview}")
+
+        # 显示停止原因
         if stop_reason:
-            print(f"    stopReason: {stop_reason}")
-        print(f"    {content}")
+            print(f"    ⏹ stopReason: {stop_reason}")
+
+        # 显示错误信息
+        if error_msg:
+            print(f"    ❌ error: {error_msg[:200]}")
 
     print(f"\n{'=' * 80}")
-    print(f"✅ 共显示 {len(last_msgs)} 条消息（总共 {len(messages)} 条）")
+    print(f"✅ 共显示 {len(last_msgs)} 条消息（总共 {len(raw_messages)} 条）")
 
 
 def extract_content_full(content, max_len: int = 500) -> str:
