@@ -582,8 +582,8 @@ def _print_edit_diff(old_str: str, new_str: str, max_lines: int = 100,
                 inner_plain = prefix_part + line
                 print(f"{prefix}{BG_GREEN}{inner_plain}{' ' * padding}{RESET}")
         else:
-            # keep 行：检查是否是注释行
-            line_num = f"{old_num:5d}"
+            # keep 行：检查是否是注释行，使用新文件行号
+            line_num = f"{new_num:5d}"
             stripped = line.strip()
             is_comment = stripped.startswith('#') or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*')
             prefix_part = f"{line_num}   "
@@ -613,8 +613,8 @@ def _compute_diff_with_lines(old_lines: list, new_lines: list, start_line: int =
 
     返回: [(op, old_num, new_num, line), ...]
     op: 'keep' | 'del' | 'add'
-    old_num: 在文件中的真实行号（如果start_line>0），否则在 old 中的相对行号
-    new_num: 在文件中的真实行号（如果start_line>0），否则在 new 中的相对行号
+    old_num: 在原始文件中的真实行号（del/keep 有效）
+    new_num: 在新文件中的真实行号（add/keep 有效）
     """
     m, n = len(old_lines), len(new_lines)
 
@@ -627,31 +627,49 @@ def _compute_diff_with_lines(old_lines: list, new_lines: list, start_line: int =
             else:
                 dp[i][j] = max(dp[i-1][j], dp[i][j-1])
 
-    # 回溯生成 diff（带行号）
+    # 回溯生成 diff（暂时用占位行号）
     diff = []
     i, j = m, n
 
     while i > 0 or j > 0:
         if i > 0 and j > 0 and old_lines[i-1] == new_lines[j-1]:
-            # keep: 使用真实行号（如果start_line > 0）
-            real_old = start_line + i - 1 if start_line > 0 else i
-            real_new = start_line + j - 1 if start_line > 0 else j
-            diff.append(('keep', real_old, real_new, old_lines[i-1]))
+            diff.append(('keep', 0, 0, old_lines[i-1]))
             i -= 1
             j -= 1
         elif j > 0 and (i == 0 or dp[i][j-1] >= dp[i-1][j]):
-            # add: 新增行，使用真实行号
-            real_new = start_line + j - 1 if start_line > 0 else j
-            diff.append(('add', None, real_new, new_lines[j-1]))
+            diff.append(('add', None, 0, new_lines[j-1]))
             j -= 1
         else:
-            # del: 删除行，使用真实行号
-            real_old = start_line + i - 1 if start_line > 0 else i
-            diff.append(('del', real_old, None, old_lines[i-1]))
+            diff.append(('del', 0, None, old_lines[i-1]))
             i -= 1
 
     diff.reverse()
-    return diff
+
+    # 重新计算行号（前向遍历，正确处理偏移）
+    result = []
+    old_idx = 0  # 在 old_lines 中的索引（0-based）
+    new_idx = 0  # 在 new_lines 中的索引（0-based）
+
+    for op, _, _, line in diff:
+        if op == 'keep':
+            # keep: 同时显示 old 和 new 行号（1-based）
+            real_old = start_line + old_idx if start_line > 0 else old_idx + 1
+            real_new = start_line + new_idx if start_line > 0 else new_idx + 1
+            result.append(('keep', real_old, real_new, line))
+            old_idx += 1
+            new_idx += 1
+        elif op == 'del':
+            # del: 只显示 old 行号
+            real_old = start_line + old_idx if start_line > 0 else old_idx + 1
+            result.append(('del', real_old, None, line))
+            old_idx += 1
+        else:  # add
+            # add: 只显示 new 行号
+            real_new = start_line + new_idx if start_line > 0 else new_idx + 1
+            result.append(('add', None, real_new, line))
+            new_idx += 1
+
+    return result
 
 
 def _print_content(label: str, content: str):
