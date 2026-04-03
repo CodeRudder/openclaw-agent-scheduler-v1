@@ -66,7 +66,7 @@ CLAUDE_PROJECTS_BASE = Path.home() / ".claude" / "projects"
 PROJECT_DIR = Path(__file__).parent.parent
 
 # Follow模式刷新间隔（秒）
-FOLLOW_INTERVAL = 2
+FOLLOW_INTERVAL = 1  # Follow模式刷新间隔（秒）
 
 # ANSI 背景色（用于 diff 显示）
 BG_RED = "\033[48;5;52m"    # 暗红色背景
@@ -1366,7 +1366,7 @@ def main():
     parser.add_argument("--agents", "-A", action="store_true", help="列出所有OpenClaw agents")
     parser.add_argument("--claude", "-c", nargs="?", const="", default=None, dest="claude",
                         help="Claude项目模式。不指定项目时列出所有项目")
-    parser.add_argument("--follow", "-w", action="store_true", help="Follow模式，持续监控新消息（每2秒刷新）")
+    parser.add_argument("--follow", "-w", action="store_true", help="Follow模式，持续监控新消息（每1秒刷新）")
 
     args = parser.parse_args()
 
