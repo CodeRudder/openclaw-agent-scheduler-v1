@@ -431,20 +431,21 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
                         # Bash 工具
                         print(f"    🔧 [工具调用: {name}]")
                         print(f"       💻 command: {inp['command'][:200]}")
-                    elif "file_path" in inp and "old_string" in inp:
-                        # Edit 工具 (Claude 格式) - unified diff 显示（带真实行号）
-                        print(f"    🔧 [工具调用: {name}]")
-                        print(f"       📄 file: {inp['file_path']}")
-                        old_str = inp['old_string']
-                        new_str = inp.get('new_string', '')
-                        _print_edit_diff(old_str, new_str, file_cache=file_cache, file_path=inp['file_path'])
-                    elif "path" in inp and "oldText" in inp:
-                        # Edit 工具 (OpenClaw Agent 格式) - unified diff 显示（带真实行号）
-                        print(f"    🔧 [工具调用: {name}]")
-                        print(f"       📄 file: {inp['path']}")
-                        old_str = inp['oldText']
-                        new_str = inp.get('newText', '')
-                        _print_edit_diff(old_str, new_str, file_cache=file_cache, file_path=inp['path'])
+                    elif ("old_string" in inp or "oldText" in inp):
+                        # Edit 工具 - 兼容多种格式组合
+                        # Claude: file_path + old_string + new_string
+                        # OpenClaw: path + oldText + newText
+                        # 混合: path + old_string + new_string
+                        file_path = inp.get('file_path') or inp.get('path')
+                        old_str = inp.get('old_string') or inp.get('oldText', '')
+                        new_str = inp.get('new_string') or inp.get('newText', '')
+
+                        if file_path and old_str:
+                            print(f"    🔧 [工具调用: {name}]")
+                            print(f"       📄 file: {file_path}")
+                            _print_edit_diff(old_str, new_str, file_cache=file_cache, file_path=file_path)
+                        else:
+                            print(f"    🔧 [工具调用: {name}] {file_path or '?'}")
                     elif "file_path" in inp or "path" in inp:
                         # Read/Write 等文件工具
                         file_path = inp.get('file_path') or inp.get('path')
