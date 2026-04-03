@@ -84,7 +84,12 @@ def get_session_files(agent_name: str, include_backups: bool = False) -> list:
 
 
 def parse_session_file(file_path: Path) -> dict:
-    """解析会话文件，提取关键信息"""
+    """解析会话文件，提取关键信息
+
+    支持多种JSONL格式：
+    1. Agent会话格式: {"type": "message", "message": {"role": "assistant", ...}}
+    2. Claude项目格式: {"type": "user"|"assistant", "message": {...}}
+    """
     result = {
         "file": str(file_path),
         "mtime": datetime.fromtimestamp(file_path.stat().st_mtime),
@@ -102,14 +107,30 @@ def parse_session_file(file_path: Path) -> dict:
                     continue
                 try:
                     msg = json.loads(line)
-                    if msg.get("type") == "message":
+                    msg_type = msg.get("type", "")
+
+                    # 格式1: Agent会话格式 {"type": "message", "message": {...}}
+                    if msg_type == "message":
                         message = msg.get("message", {})
                         result["messages"].append(message)
-                        # 保存原始消息（包含时间戳等元信息）
                         result["raw_messages"].append({
                             "timestamp": msg.get("timestamp"),
                             "message": message
                         })
+
+                    # 格式2: Claude项目格式 {"type": "user"|"assistant", "message": {...}}
+                    elif msg_type in ("user", "assistant"):
+                        message = msg.get("message", {})
+                        # 确保message有role字段
+                        if isinstance(message, dict) and "role" not in message:
+                            message = dict(message)  # 复制避免修改原对象
+                            message["role"] = msg_type
+                        result["messages"].append(message)
+                        result["raw_messages"].append({
+                            "timestamp": msg.get("timestamp"),
+                            "message": message
+                        })
+
                 except json.JSONDecodeError:
                     continue
 
@@ -576,19 +597,49 @@ def extract_content_full(content, max_len: int = 500) -> str:
     elif isinstance(content, list):
         text_parts = []
         for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
+            if not isinstance(item, dict):
+                if isinstance(item, str):
+                    text = clean_text(item)
+                    if text.strip():
+                        text_parts.append(text.strip())
+                continue
+            item_type = item.get("type", "")
+            if item_type == "text":
                 text = item.get("text", "")
                 text = clean_text(text)
                 if text.strip():
                     text_parts.append(text.strip())
-            elif isinstance(item, dict) and item.get("type") == "toolUse":
+            elif item_type == "toolUse":
                 text_parts.append(f"[工具调用: {item.get('name', '?')}]")
-            elif isinstance(item, dict) and item.get("type") == "toolResult":
+            elif item_type == "toolResult":
                 text_parts.append(f"[工具结果: {item.get('toolUseId', '?')}]")
-            elif isinstance(item, str):
-                text = clean_text(item)
-                if text.strip():
-                    text_parts.append(text.strip())
+            elif item_type == "tool_use":
+                name = item.get("name", "?")
+                inp = item.get("input", {})
+                if isinstance(inp, dict):
+                    # 显示工具调用的关键参数
+                    key_info = ""
+                    if "command" in inp:
+                        key_info = f": {inp['command'][:80]}"
+                    elif "file_path" in inp:
+                        key_info = f": {inp['file_path']}"
+                    elif "pattern" in inp:
+                        key_info = f": {inp['pattern']}"
+                    text_parts.append(f"[工具调用: {name}{key_info}]")
+                else:
+                    text_parts.append(f"[工具调用: {name}]")
+            elif item_type == "tool_result":
+                result_content = item.get("content", "")
+                if isinstance(result_content, str):
+                    preview = result_content[:80].replace('\n', ' ')
+                    text_parts.append(f"[工具结果: {preview}...]")
+                else:
+                    text_parts.append(f"[工具结果]")
+            elif item_type == "thinking":
+                thinking = item.get("thinking", "")
+                if thinking:
+                    preview = thinking[:80].replace('\n', ' ')
+                    text_parts.append(f"[思考: {preview}...]")
         full_text = "\n".join(text_parts)
         return full_text[:max_len] + "..." if len(full_text) > max_len else full_text
     return str(content)[:max_len]
