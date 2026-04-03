@@ -243,12 +243,12 @@ class ClaudeDrivenScheduler:
             logger.error(f"保存调度计划失败: {e}")
 
     def _mark_milestone_in_progress(self, decision):
-        """通知发送后，标记对应里程碑为in_progress
+        """通知发送后，重置对应里程碑状态为in_progress
 
         精确匹配逻辑：
-        1. 找到状态为pending的里程碑
-        2. 检查assigned_to是否与@的user匹配
-        3. 验证该agent属于目标群
+        1. 找到assigned_to与@用户匹配的里程碑
+        2. 验证该agent属于目标群
+        3. 将状态重置为in_progress（除非已完成）
         """
         if not self.scheduling_plan or "milestones" not in self.scheduling_plan:
             return
@@ -273,8 +273,8 @@ class ClaudeDrivenScheduler:
             status = milestone.get("status", "")
             assigned_to = milestone.get("assigned_to", "")
 
-            # 只处理pending状态的里程碑
-            if status != "pending":
+            # 已完成的里程碑不重置
+            if status == "completed":
                 continue
 
             # 检查assigned_to是否与@的user精确匹配
@@ -292,10 +292,11 @@ class ClaudeDrivenScheduler:
                 logger.debug(f"  ⏭ 里程碑 {milestone_id} 的 assigned_to '{assigned_to}' 不属于目标群 {target_group}")
                 continue
 
-            # 精确匹配成功，更新状态
+            # 精确匹配成功，重置状态为in_progress
+            old_status = status
             milestone["status"] = "in_progress"
             milestone["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            logger.info(f"  📋 已标记里程碑 {milestone_id} '{name}' 为 in_progress (assigned_to: {assigned_to})")
+            logger.info(f"  📋 已重置里程碑 {milestone_id} '{name}' 状态: {old_status} → in_progress (assigned_to: {assigned_to})")
             updated = True
 
         if updated:
