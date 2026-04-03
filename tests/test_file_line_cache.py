@@ -181,6 +181,212 @@ class TestFindEditStartLine:
         result = find_edit_start_line(file_cache, "/path/to/test.py", "def hello():")
         assert result == 1
 
+    def test_find_with_leading_trailing_spaces(self):
+        """测试前后空格处理"""
+        # 创建带空格的文件内容
+        content = """Contents of test.py:
+     1→def hello():
+     2→    print("hello")
+     3→    return True
+     4→
+     5→def world():
+     6→    print("world")
+"""
+        file_cache = parse_read_result(content)
+
+        # old_string 带前后空格
+        old_string = "  def hello():\n    print(\"hello\")  "
+        result = find_edit_start_line(file_cache, "test.py", old_string)
+        # 应该能找到（宽松匹配会处理空格）
+        assert result == 1
+
+    def test_find_with_mixed_indentation(self):
+        """测试混合缩进（空格和制表符）"""
+        content = """Contents of test.py:
+     1→def hello():
+     2→\tprint("hello")
+     3→    return True
+"""
+        file_cache = parse_read_result(content)
+
+        # old_string 使用空格缩进
+        old_string = "def hello():\n    print(\"hello\")"
+        result = find_edit_start_line(file_cache, "test.py", old_string)
+        # 宽松匹配应该能找到
+        assert result >= 1
+
+    def test_find_multiline_with_empty_lines(self):
+        """测试包含空行的多行匹配"""
+        content = """Contents of test.py:
+     1→def hello():
+     2→    print("hello")
+     3→
+     4→    return True
+     5→
+     6→def world():
+"""
+        file_cache = parse_read_result(content)
+
+        # old_string 包含空行
+        old_string = "def hello():\n    print(\"hello\")\n\n    return True"
+        result = find_edit_start_line(file_cache, "test.py", old_string)
+        assert result == 1
+
+
+# ===== Edit Diff 完整流程测试 =====
+
+class TestEditDiffFlow:
+    """测试 Edit diff 完整流程（Read -> Edit -> Diff）"""
+
+    def setup_method(self):
+        clear_cache()
+
+    def test_edit_diff_with_real_line_numbers(self):
+        """测试 Edit diff 显示真实行号"""
+        from scripts.check_agent_sessions import _compute_diff_with_lines
+
+        # 1. 模拟 Read 工具结果
+        read_content = """Contents of test.py:
+    10→def get_messages(self):
+    11→    try:
+    12→        resp = requests.get(url)
+    13→        resp.raise_for_status()
+    14→        return resp.json()
+    15→    except Exception as e:
+    16→        logger.error(f"Error: {e}")
+    17→        return []
+"""
+        file_cache = parse_read_result(read_content)
+
+        # 2. 模拟 Edit 工具的 old_string
+        old_string = """def get_messages(self):
+    try:
+        resp = requests.get(url)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        return []"""
+
+        # 3. 查找起始行号
+        start_line = find_edit_start_line(file_cache, "test.py", old_string)
+        assert start_line == 10
+
+        # 4. 模拟 Edit 工具的 new_string（添加错误处理）
+        new_string = """def get_messages(self):
+    try:
+        resp = requests.get(url)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            logger.warning(f"Not found: {e}")
+        else:
+            logger.error(f"HTTP error: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        return []"""
+
+        # 5. 计算 diff（带真实行号）
+        old_lines = old_string.split('\n')
+        new_lines = new_string.split('\n')
+        diff = _compute_diff_with_lines(old_lines, new_lines, start_line)
+
+        # 6. 验证行号连续性
+        line_numbers = []
+        for op, old_num, new_num, line in diff:
+            if op == 'keep':
+                line_numbers.append(new_num)
+            elif op == 'add':
+                line_numbers.append(new_num)
+
+        # 验证行号连续（10, 11, 12, ...）
+        for i in range(len(line_numbers) - 1):
+            assert line_numbers[i+1] == line_numbers[i] + 1, \
+                f"行号不连续: {line_numbers[i]} -> {line_numbers[i+1]}"
+
+    def test_edit_diff_with_deletion(self):
+        """测试删除行的 diff"""
+        from scripts.check_agent_sessions import _compute_diff_with_lines
+
+        # Read 结果
+        read_content = """Contents of test.py:
+    20→def process():
+    21→    step1()
+    22→    step2()  # 这行将被删除
+    23→    step3()
+    24→    return True
+"""
+        file_cache = parse_read_result(read_content)
+
+        old_string = """def process():
+    step1()
+    step2()  # 这行将被删除
+    step3()
+    return True"""
+
+        new_string = """def process():
+    step1()
+    step3()
+    return True"""
+
+        start_line = find_edit_start_line(file_cache, "test.py", old_string)
+        assert start_line == 20
+
+        # 计算 diff
+        diff = _compute_diff_with_lines(
+            old_string.split('\n'),
+            new_string.split('\n'),
+            start_line
+        )
+
+        # 验证删除行
+        has_deletion = any(op == 'del' and old_num == 22 for op, old_num, _, _ in diff)
+        assert has_deletion, "应该有第22行的删除操作"
+
+        # 验证删除后的行号正确偏移
+        keep_lines_after_del = [(new_num, line) for op, _, new_num, line in diff
+                                if op == 'keep' and 'step3' in line]
+        assert keep_lines_after_del[0][0] == 22, "删除后 step3() 应该在第22行"
+
+    def test_edit_diff_with_insertion(self):
+        """测试新增行的 diff"""
+        from scripts.check_agent_sessions import _compute_diff_with_lines
+
+        read_content = """Contents of test.py:
+    30→def validate():
+    31→    check_input()
+    32→    return True
+"""
+        file_cache = parse_read_result(read_content)
+
+        old_string = """def validate():
+    check_input()
+    return True"""
+
+        new_string = """def validate():
+    check_input()
+    check_permissions()  # 新增行
+    return True"""
+
+        start_line = find_edit_start_line(file_cache, "test.py", old_string)
+        diff = _compute_diff_with_lines(
+            old_string.split('\n'),
+            new_string.split('\n'),
+            start_line
+        )
+
+        # 验证新增行
+        has_addition = any(op == 'add' and 'check_permissions' in line
+                          for op, _, _, line in diff)
+        assert has_addition, "应该有新增行"
+
+        # 验证新增行的行号
+        add_line_num = next(new_num for op, _, new_num, line in diff
+                           if op == 'add' and 'check_permissions' in line)
+        assert add_line_num == 32, "新增行应该在第32行"
+
 
 # ===== LRU缓存测试 =====
 
