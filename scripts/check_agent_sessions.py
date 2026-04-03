@@ -456,9 +456,21 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
                 tool_use_id = item.get("tool_use_id", "")
                 if isinstance(result, str):
                     # 尝试解析 Read 工具结果，缓存文件内容（用于后续 Edit 真实行号）
-                    last_file = file_cache.get("_last_read_file")
-                    if last_file:
-                        parsed = parse_read_result(result, file_path=last_file)
+                    # 优先从 toolUseResult.file.filePath 获取文件路径
+                    tool_result_info = raw_msg.get("toolUseResult", {})
+                    file_info = tool_result_info.get("file", {})
+                    file_path_from_result = file_info.get("filePath", "")
+
+                    # 如果没有从 toolUseResult 获取到，使用之前记录的 _last_read_file
+                    cache_file_path = file_path_from_result or file_cache.get("_last_read_file")
+
+                    if cache_file_path:
+                        # 如果 toolUseResult.file.content 存在，使用它（纯文本，无行号前缀）
+                        file_content = file_info.get("content", "")
+                        if file_content:
+                            parsed = parse_read_result(file_content, file_path=cache_file_path)
+                        else:
+                            parsed = parse_read_result(result, file_path=cache_file_path)
                         if parsed:
                             file_cache.update(parsed)
                     _print_tool_result(result)

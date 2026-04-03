@@ -409,6 +409,101 @@ class TestRealSessionData:
         assert hash_map[hash('def hello():')] == 1
         assert hash_map[hash('def world():')] == 5
 
+    def test_claude_read_with_tab_separator(self):
+        """测试 Claude 项目格式（制表符分隔）"""
+        # Claude 项目的 Read 工具结果格式（使用制表符）
+        content = """150\t
+151\t    def _load_notification_history(self) -> Dict:
+152\t        \"\"\"加载通知历史\"\"\"
+153\t        try:
+154\t            if HISTORY_FILE.exists():
+"""
+        result = parse_read_result(content, file_path="scheduler.py")
+        assert "scheduler.py" in result
+        hash_map = result["scheduler.py"]
+        # 验证行号正确解析
+        # 注意：解析时内容会被 strip()，所以用 strip() 后的内容计算 hash
+        assert hash_map[hash('def _load_notification_history(self) -> Dict:')] == 151
+        assert hash_map[hash('"""加载通知历史"""')] == 152
+
+    def test_real_claude_edit_scenario(self):
+        """测试真实 Claude Edit 场景（完整流程）"""
+        # 模拟真实会话中的 Read -> Edit 流程
+
+        # 1. Read 工具结果（使用制表符格式）
+        read_content = """170\t
+171\t    def get_group_messages(self, channel_id: str, limit: int = MESSAGES_PER_GROUP) -> List[GroupMessage]:
+172\t        \"\"\"获取群消息\"\"\"
+173\t        try:
+174\t            # Mattermost API v4: /api/v4/channels/{channel_id}/posts
+175\t            resp = requests.get(
+176\t                f\"{MM_URL}/api/v4/channels/{channel_id}/posts\",
+177\t                headers=self.headers,
+178\t                params={\"page\": 0, \"per_page\": limit},
+179\t                timeout=10
+180\t            )
+181\t            resp.raise_for_status()
+182\t            data = resp.json()
+183\t
+184\t            messages = []
+185\t            posts = data.get(\"posts\", {})
+186\t            # posts是字典，需要按order排序
+187\t            order = data.get(\"order\", [])
+188\t            for post_id in reversed(order[-limit:]):  # 获取最新的N条
+189\t                post = posts.get(post_id, {})
+190\t                messages.append(GroupMessage(
+191\t                    group_id=channel_id,
+192\t                    group_name=\"\",
+193\t                    sender=post.get(\"user_id\", \"\"),
+194\t                    content=post.get(\"message\", \"\"),
+195\t                    timestamp=post.get(\"create_at\", 0) / 1000
+196\t                ))
+197\t            return messages
+198\t        except Exception as e:
+199\t            logger.error(f\"获取群消息失败: {e}\")
+200\t            return []
+"""
+        file_path = "/home/user/project/scheduler.py"
+        file_cache = parse_read_result(read_content, file_path=file_path)
+        assert file_path in file_cache
+
+        # 2. Edit 工具调用的 old_string
+        old_string = """    def get_group_messages(self, channel_id: str, limit: int = MESSAGES_PER_GROUP) -> List[GroupMessage]:
+        \"\"\"获取群消息\"\"\"
+        try:
+            # Mattermost API v4: /api/v4/channels/{channel_id}/posts
+            resp = requests.get(
+                f\"{MM_URL}/api/v4/channels/{channel_id}/posts\",
+                headers=self.headers,
+                params={\"page\": 0, \"per_page\": limit},
+                timeout=10
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            messages = []
+            posts = data.get(\"posts\", {})
+            # posts是字典，需要按order排序
+            order = data.get(\"order\", [])
+            for post_id in reversed(order[-limit:]):  # 获取最新的N条
+                post = posts.get(post_id, {})
+                messages.append(GroupMessage(
+                    group_id=channel_id,
+                    group_name=\"\",
+                    sender=post.get(\"user_id\", \"\"),
+                    content=post.get(\"message\", \"\"),
+                    timestamp=post.get(\"create_at\", 0) / 1000
+                ))
+            return messages
+        except Exception as e:
+            logger.error(f\"获取群消息失败: {e}\")
+            return []"""
+
+        # 3. 查找 old_string 的起始行号
+        start_line = find_edit_start_line(file_cache, file_path, old_string)
+        # 应该从第 171 行开始
+        assert start_line == 171, f"期望 171，实际 {start_line}"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

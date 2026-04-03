@@ -94,7 +94,8 @@ def parse_read_result(content: str, file_path: str = None) -> Dict[str, Dict[int
     # 匹配带行号的格式
     # 格式1: "     1→def hello():" 或 "     1│def hello():"
     # 格式2: "    10 | content"
-    line_pattern = re.compile(r'^\s*(\d+)\s*[→│|]\s*(.*)$')
+    # 格式3: "    10\tcontent" (Claude项目格式，使用制表符)
+    line_pattern = re.compile(r'^\s*(\d+)\s*[→│|\t]\s*(.*)$')
 
     # 匹配文件路径标记
     # 格式1: "Contents of file.py:"
@@ -133,6 +134,10 @@ def parse_read_result(content: str, file_path: str = None) -> Dict[str, Dict[int
     if current_file and file_hash_map:
         _add_to_cache(current_file, file_hash_map)
         result[current_file] = file_hash_map
+    elif has_numbered_lines and file_path and file_hash_map:
+        # 带行号的格式但没有文件路径标记，使用传入的 file_path
+        _add_to_cache(file_path, file_hash_map)
+        result[file_path] = file_hash_map
     elif not has_numbered_lines and file_path:
         # 纯文本格式：没有检测到带行号的行，使用传入的 file_path
         # 为每行生成递增行号（从1开始）
