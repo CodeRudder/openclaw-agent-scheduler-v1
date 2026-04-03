@@ -371,6 +371,24 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
 
     role_icon = "🤖" if role == "assistant" else "👤" if role == "user" else "🔧"
 
+    # 特殊处理 OpenClaw Agent 的 toolResult 消息
+    if role == "toolResult":
+        tool_name = msg.get("toolName", "?")
+        tool_call_id = msg.get("toolCallId", "")
+        is_error = msg.get("isError", False)
+        error_icon = "❌" if is_error else "✅"
+        print(f"\n[{line_num}] 📤 {tool_name} | {error_icon} | ⏰ {time_str or '无时间'}")
+        # 提取工具结果内容
+        if isinstance(content_raw, list):
+            for item in content_raw:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = item.get("text", "")
+                    _print_tool_result(text)
+                    break
+        elif isinstance(content_raw, str):
+            _print_tool_result(content_raw)
+        return file_cache
+
     # 状态显示
     status_str = ""
     if stop_reason:
@@ -394,9 +412,11 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
                 text = item.get("text", "")
                 if text and text.strip():
                     _print_content("📝 内容", text)
-            elif item_type == "tool_use" or item_type == "toolUse":
+            elif item_type in ("tool_use", "toolUse", "toolCall"):
+                # tool_use (Claude) / toolUse (旧格式) / toolCall (OpenClaw Agent)
                 name = item.get("name", "?")
-                inp = item.get("input", {})
+                # tool_use 用 input，toolCall 用 arguments
+                inp = item.get("input") or item.get("arguments", {})
                 if isinstance(inp, dict):
                     if "command" in inp:
                         # Bash 工具
@@ -1214,9 +1234,10 @@ def extract_content_full(content, max_len: int = 500) -> str:
                 text_parts.append(f"[工具调用: {item.get('name', '?')}]")
             elif item_type == "toolResult":
                 text_parts.append(f"[工具结果: {item.get('toolUseId', '?')}]")
-            elif item_type == "tool_use":
+            elif item_type in ("tool_use", "toolCall"):
+                # tool_use (Claude) / toolCall (OpenClaw Agent)
                 name = item.get("name", "?")
-                inp = item.get("input", {})
+                inp = item.get("input") or item.get("arguments", {})
                 if isinstance(inp, dict):
                     # 显示工具调用的关键参数
                     key_info = ""
