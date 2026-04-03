@@ -432,18 +432,26 @@ def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
                         print(f"    🔧 [工具调用: {name}]")
                         print(f"       💻 command: {inp['command'][:200]}")
                     elif "file_path" in inp and "old_string" in inp:
-                        # Edit 工具 - unified diff 显示（带真实行号）
+                        # Edit 工具 (Claude 格式) - unified diff 显示（带真实行号）
                         print(f"    🔧 [工具调用: {name}]")
                         print(f"       📄 file: {inp['file_path']}")
                         old_str = inp['old_string']
                         new_str = inp.get('new_string', '')
                         _print_edit_diff(old_str, new_str, file_cache=file_cache, file_path=inp['file_path'])
-                    elif "file_path" in inp:
+                    elif "path" in inp and "oldText" in inp:
+                        # Edit 工具 (OpenClaw Agent 格式) - unified diff 显示（带真实行号）
+                        print(f"    🔧 [工具调用: {name}]")
+                        print(f"       📄 file: {inp['path']}")
+                        old_str = inp['oldText']
+                        new_str = inp.get('newText', '')
+                        _print_edit_diff(old_str, new_str, file_cache=file_cache, file_path=inp['path'])
+                    elif "file_path" in inp or "path" in inp:
                         # Read/Write 等文件工具
-                        print(f"    🔧 [工具调用: {name}] {inp['file_path']}")
+                        file_path = inp.get('file_path') or inp.get('path')
+                        print(f"    🔧 [工具调用: {name}] {file_path}")
                         # 记录 Read 工具的 file_path，用于后续缓存 toolResult 内容
                         if name.lower() == "read":
-                            file_cache["_last_read_file"] = inp['file_path']
+                            file_cache["_last_read_file"] = file_path
                     elif "pattern" in inp:
                         # Grep/Glob 等搜索工具
                         print(f"    🔧 [工具调用: {name}] {inp['pattern']}")
