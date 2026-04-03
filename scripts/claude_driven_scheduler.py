@@ -752,7 +752,7 @@ class ClaudeDrivenScheduler:
             return {"has_session": False, "is_timeout": False, "agents": []}
 
         result = {"has_session": False, "agents": [], "is_timeout": False}
-        agents_base = Path("/home/gongdewei/.openclaw/agents")
+        agents_base = Path.home() / ".openclaw" / "agents"
 
         for agent_name in agents:
             agent_session_dir = agents_base / agent_name / "sessions"
@@ -817,21 +817,46 @@ class ClaudeDrivenScheduler:
         if task_desc:
             # 有具体任务描述，生成针对性消息
             if "修复" in task_desc or "BUG" in task_desc.upper() or "bug" in task_desc:
-                message = f"@{agent_name} 🐛 继续修复任务：{task_desc}\n请定位问题原因，修复后编译并自测验证。"
+                message = (
+                    f"@{agent_name} 🐛 **继续修复任务**：{task_desc[:100]}\n\n"
+                    f"请定位问题原因 → 修复代码 → 编译验证 → 自测通过，完成后输出结果。\n\n"
+                    f"⚠️ 注意：不要只回复状态就停止，请持续执行直到任务完成。"
+                )
             elif "测试" in task_desc or "验收" in task_desc:
-                message = f"@{agent_name} 🧪 继续测试任务：{task_desc}\n请执行测试用例并输出测试结果。"
+                message = (
+                    f"@{agent_name} 🧪 **继续测试任务**：{task_desc[:100]}\n\n"
+                    f"请执行测试用例，输出通过/失败统计及失败详情。\n\n"
+                    f"⚠️ 注意：不要只回复状态就停止，请持续执行直到测试完成。"
+                )
             elif "部署" in task_desc or "发布" in task_desc:
-                message = f"@{agent_name} 🚀 继续部署任务：{task_desc}\n请执行部署并验证服务状态。"
+                message = (
+                    f"@{agent_name} 🚀 **继续部署任务**：{task_desc[:100]}\n\n"
+                    f"请执行部署并验证服务状态。\n\n"
+                    f"⚠️ 注意：不要只回复状态就停止，请持续执行直到部署完成。"
+                )
             else:
-                message = f"@{agent_name} 🔄 继续处理任务：{task_desc}\n请继续执行并输出处理结果。"
+                message = (
+                    f"@{agent_name} 🔄 **继续处理任务**：{task_desc[:100]}\n\n"
+                    f"请继续执行并输出处理结果。\n\n"
+                    f"⚠️ 注意：不要只回复状态就停止，请持续执行直到任务完成。"
+                )
         else:
             # 无具体任务描述
             if stop_reason == "error":
-                message = f"@{agent_name} ⚠️ 会话遇到错误中断，请检查错误原因并继续处理当前任务。"
+                message = (
+                    f"@{agent_name} ⚠️ 会话遇到错误中断，请检查错误原因并继续处理当前任务。\n\n"
+                    f"⚠️ 注意：不要只回复状态就停止，请持续执行直到任务完成。"
+                )
             elif stop_reason == "aborted":
-                message = f"@{agent_name} ⚠️ 会话异常终止，请重新开始处理当前任务。"
+                message = (
+                    f"@{agent_name} ⚠️ 会话异常终止，请重新开始处理当前任务。\n\n"
+                    f"⚠️ 注意：不要只回复状态就停止，请持续执行直到任务完成。"
+                )
             else:
-                message = f"@{agent_name} 🔄 会话已停止，请继续处理当前任务并输出结果。"
+                message = (
+                    f"@{agent_name} 🔄 会话已停止，请继续处理当前任务并输出结果。\n\n"
+                    f"⚠️ 注意：不要只回复状态就停止，请持续执行直到任务完成。"
+                )
 
         try:
             resp = requests.post(
@@ -866,7 +891,8 @@ class ClaudeDrivenScheduler:
                     f"请回复：\n"
                     f"1. 已定位问题原因及修复方案\n"
                     f"2. 修复后编译是否通过\n"
-                    f"3. 自测验证结果"
+                    f"3. 自测验证结果\n\n"
+                    f"⚠️ 注意：回复后请继续执行任务，不要停止会话。"
                 )
             elif "测试" in task_desc or "验收" in task_desc:
                 message = (
@@ -875,7 +901,8 @@ class ClaudeDrivenScheduler:
                     f"请回复：\n"
                     f"1. 已执行测试用例数量\n"
                     f"2. 通过/失败统计\n"
-                    f"3. 如有失败，输出失败详情"
+                    f"3. 如有失败，输出失败详情\n\n"
+                    f"⚠️ 注意：回复后请继续执行任务，不要停止会话。"
                 )
             elif "开发" in task_desc or "实现" in task_desc:
                 message = (
@@ -884,7 +911,8 @@ class ClaudeDrivenScheduler:
                     f"请回复：\n"
                     f"1. 已完成的功能点\n"
                     f"2. 编译是否通过\n"
-                    f"3. 自测验证结果"
+                    f"3. 自测验证结果\n\n"
+                    f"⚠️ 注意：回复后请继续执行任务，不要停止会话。"
                 )
             else:
                 message = (
@@ -893,7 +921,8 @@ class ClaudeDrivenScheduler:
                     f"请回复：\n"
                     f"1. 当前处理进度\n"
                     f"2. 遇到的问题（如有）\n"
-                    f"3. 预计完成时间"
+                    f"3. 预计完成时间\n\n"
+                    f"⚠️ 注意：回复后请继续执行任务，不要停止会话。"
                 )
         else:
             # 无具体任务描述的通用询问
@@ -902,7 +931,8 @@ class ClaudeDrivenScheduler:
                 f"请回复当前处理状态：\n"
                 f"- 如已完成，请输出结果\n"
                 f"- 如遇阻塞，请说明原因\n"
-                f"- 如需继续处理，请立即继续"
+                f"- 如需继续处理，请立即继续\n\n"
+                f"⚠️ 注意：回复后请继续执行任务，不要停止会话。"
             )
 
         try:
@@ -1129,16 +1159,18 @@ class ClaudeDrivenScheduler:
         # 包含关键问题的激活消息（避免agent认为是定时检查而忽略）
         issues = decision.extracted_issues[:3] if decision.extracted_issues else []
         if issues:
-            issues_str = "、".join(issues)
+            issues_str = "、".join(i[:60] for i in issues)
             message = (
-                f"{mentions} 🔄 **任务仍需处理，请继续执行：**\n"
+                f"{mentions} 🔄 **任务仍需处理，请继续执行**\n\n"
                 f"待处理问题：{issues_str}\n\n"
-                f"请定位问题 → 修复 → 编译 → 自测，然后输出结果。"
+                f"请定位问题 → 修复 → 编译 → 自测，然后输出结果。\n\n"
+                f"⚠️ 注意：不要只回复状态就停止，请持续执行直到任务完成。"
             )
         else:
             message = (
-                f"{mentions} 🔄 **任务仍需处理，请继续执行**\n"
-                f"请继续当前任务，定位问题并修复，编译自测后输出结果。"
+                f"{mentions} 🔄 **任务仍需处理，请继续执行**\n\n"
+                f"请继续当前任务，定位问题并修复，编译自测后输出结果。\n\n"
+                f"⚠️ 注意：不要只回复状态就停止，请持续执行直到任务完成。"
             )
 
         try:
@@ -1167,7 +1199,7 @@ class ClaudeDrivenScheduler:
             logger.info("  ✅ 无阻塞任务")
             return
 
-        agents_base = Path("/home/gongdewei/.openclaw/agents")
+        agents_base = Path.home() / ".openclaw" / "agents"
         handled = 0
 
         for bt in blocking_tasks:
@@ -1453,6 +1485,26 @@ class ClaudeDrivenScheduler:
                 return is_timeout or is_stopped
 
         # 找不到agent记录，保守认为活跃（不激活）
+        return False
+
+    def _get_agent_stop_reason(self, group_id: str, agent_name: str, all_session_status: Dict) -> Optional[str]:
+        """获取agent会话的stopReason"""
+        session_status = all_session_status.get(group_id, {})
+        for agent in session_status.get("agents", []):
+            if agent.get("name") == agent_name:
+                return agent.get("stop_reason")
+        return None
+
+    def _has_prior_notification(self, decision: SchedulingDecision) -> bool:
+        """检查是否已对该agent/群发送过通知（不管内容是否相同）"""
+        history = self.notification_history.get("history", [])
+        if not history:
+            return False
+        curr_mention = set(u.lstrip('@').lower() for u in decision.mention_users)
+        for hist in history[-10:]:
+            hist_mention = set(u.lstrip('@').lower() for u in hist.get("mention_users", []))
+            if hist_mention & curr_mention and hist.get("target_group") == decision.target_group:
+                return True
         return False
 
     def analyze_with_claude(self, all_group_messages: Dict[str, List[GroupMessage]],
@@ -2603,6 +2655,30 @@ data/bugs/TC-XXX_description.md
                 first_agent = decision.mention_users[0].lstrip('@')
                 if not self._is_agent_session_inactive(decision.target_group, first_agent, all_session_status):
                     logger.info(f"  ✅ {first_agent} 会话活跃，跳过通知")
+                    continue
+
+                # 会话不活跃：检查是否已有通知历史
+                # 有历史 → 只发激活消息，避免重复发送完整通知内容
+                stop_reason = self._get_agent_stop_reason(decision.target_group, first_agent, all_session_status)
+                if stop_reason in ("stop", "aborted", "error") and self._has_prior_notification(decision):
+                    logger.info(f"  🔄 {first_agent} 会话已停止(stopReason={stop_reason})且已有通知历史，发送激活消息")
+                    if self._send_activation_only(decision):
+                        notifications_sent += 1
+                        notified_groups.add(decision.target_group)
+                        history = self.notification_history.setdefault("history", [])
+                        history.append({
+                            "timestamp": datetime.now().isoformat(),
+                            "source_group": decision.source_group,
+                            "target_group": decision.target_group,
+                            "target_group_name": decision.target_group_name,
+                            "mention_users": decision.mention_users,
+                            "extracted_issues": decision.extracted_issues[:5],
+                            "message_content": "[激活消息] " + decision.message_content[:150],
+                            "reason": f"[会话停止激活 stopReason={stop_reason}] " + decision.reasoning[:80]
+                        })
+                        if len(history) > 20:
+                            self.notification_history["history"] = history[-20:]
+                        self._save_notification_history()
                     continue
 
             # 检查是否重复通知相同任务
