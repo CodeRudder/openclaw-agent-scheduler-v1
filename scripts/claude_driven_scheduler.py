@@ -745,15 +745,33 @@ class ClaudeDrivenScheduler:
 
         return result
 
-    def send_activation_message(self, group_id: str, agent_name: str) -> bool:
-        """发送激活消息到群，@Agent通知继续处理（简洁版，不重复历史内容）"""
+    def send_activation_message(self, group_id: str, agent_name: str,
+                                 task_desc: str = "", stop_reason: str = "") -> bool:
+        """发送激活消息到群，@Agent通知继续处理（包含任务上下文）"""
         channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
         if not channel_id:
             logger.warning(f"找不到群 {group_id} 的channel_id")
             return False
 
-        # 简洁激活消息，不复述历史
-        message = f"@{agent_name} 🔄 请继续处理当前任务。"
+        # 根据任务类型生成不同的激活消息
+        if task_desc:
+            # 有具体任务描述，生成针对性消息
+            if "修复" in task_desc or "BUG" in task_desc.upper() or "bug" in task_desc:
+                message = f"@{agent_name} 🐛 继续修复任务：{task_desc}\n请定位问题原因，修复后编译并自测验证。"
+            elif "测试" in task_desc or "验收" in task_desc:
+                message = f"@{agent_name} 🧪 继续测试任务：{task_desc}\n请执行测试用例并输出测试结果。"
+            elif "部署" in task_desc or "发布" in task_desc:
+                message = f"@{agent_name} 🚀 继续部署任务：{task_desc}\n请执行部署并验证服务状态。"
+            else:
+                message = f"@{agent_name} 🔄 继续处理任务：{task_desc}\n请继续执行并输出处理结果。"
+        else:
+            # 无具体任务描述
+            if stop_reason == "error":
+                message = f"@{agent_name} ⚠️ 会话遇到错误中断，请检查错误原因并继续处理当前任务。"
+            elif stop_reason == "aborted":
+                message = f"@{agent_name} ⚠️ 会话异常终止，请重新开始处理当前任务。"
+            else:
+                message = f"@{agent_name} 🔄 会话已停止，请继续处理当前任务并输出结果。"
 
         try:
             resp = requests.post(
@@ -773,14 +791,59 @@ class ClaudeDrivenScheduler:
             return False
 
     def send_task_inquiry_message(self, group_id: str, agent_name: str, task_desc: str) -> bool:
-        """发送任务询问消息（简洁版，不重复历史内容）"""
+        """发送任务询问消息（包含具体任务描述，避免被忽略）"""
         channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
         if not channel_id:
             logger.warning(f"找不到群 {group_id} 的channel_id")
             return False
 
-        # 简洁询问消息
-        message = f"@{agent_name} 📋 任务进度确认：请回复完成结果或继续处理。"
+        # 根据任务描述生成具体询问
+        if task_desc:
+            if "修复" in task_desc or "BUG" in task_desc.upper() or "bug" in task_desc:
+                message = (
+                    f"@{agent_name} 📋 **修复任务进度确认**\n"
+                    f"当前任务：{task_desc}\n\n"
+                    f"请回复：\n"
+                    f"1. 已定位问题原因及修复方案\n"
+                    f"2. 修复后编译是否通过\n"
+                    f"3. 自测验证结果"
+                )
+            elif "测试" in task_desc or "验收" in task_desc:
+                message = (
+                    f"@{agent_name} 📋 **测试任务进度确认**\n"
+                    f"当前任务：{task_desc}\n\n"
+                    f"请回复：\n"
+                    f"1. 已执行测试用例数量\n"
+                    f"2. 通过/失败统计\n"
+                    f"3. 如有失败，输出失败详情"
+                )
+            elif "开发" in task_desc or "实现" in task_desc:
+                message = (
+                    f"@{agent_name} 📋 **开发任务进度确认**\n"
+                    f"当前任务：{task_desc}\n\n"
+                    f"请回复：\n"
+                    f"1. 已完成的功能点\n"
+                    f"2. 编译是否通过\n"
+                    f"3. 自测验证结果"
+                )
+            else:
+                message = (
+                    f"@{agent_name} 📋 **任务进度确认**\n"
+                    f"当前任务：{task_desc}\n\n"
+                    f"请回复：\n"
+                    f"1. 当前处理进度\n"
+                    f"2. 遇到的问题（如有）\n"
+                    f"3. 预计完成时间"
+                )
+        else:
+            # 无具体任务描述的通用询问
+            message = (
+                f"@{agent_name} 📋 任务进度确认\n\n"
+                f"请回复当前处理状态：\n"
+                f"- 如已完成，请输出结果\n"
+                f"- 如遇阻塞，请说明原因\n"
+                f"- 如需继续处理，请立即继续"
+            )
 
         try:
             resp = requests.post(
@@ -991,9 +1054,9 @@ class ClaudeDrivenScheduler:
         return False
 
     def _send_activation_only(self, decision) -> bool:
-        """发送简短激活消息（不重复发送完整任务详情）
+        """发送简短激活消息（包含关键问题，避免被agent忽略为定时提醒）
 
-        用于已收到任务通知但会话停止的agent，只需激活而不重复任务内容
+        用于已收到任务通知但会话停止的agent
         """
         group_id = decision.target_group
         channel_id = GROUPS.get(group_id, {}).get("channel_id", "")
@@ -1003,11 +1066,32 @@ class ClaudeDrivenScheduler:
         group_name = GROUPS.get(group_id, {}).get("name", group_id)
         mentions = " ".join([f"@{u.lstrip('@')}" for u in decision.mention_users])
 
-        # 简洁激活消息（不重复历史内容）
-        message = f"{mentions} 🔄 请继续处理当前任务，详情见之前的通知。"
+        # 包含关键问题的激活消息（避免agent认为是定时检查而忽略）
+        issues = decision.extracted_issues[:3] if decision.extracted_issues else []
+        if issues:
+            issues_str = "、".join(issues)
+            message = (
+                f"{mentions} 🔄 **任务仍需处理，请继续执行：**\n"
+                f"待处理问题：{issues_str}\n\n"
+                f"请定位问题 → 修复 → 编译 → 自测，然后输出结果。"
+            )
+        else:
+            message = (
+                f"{mentions} 🔄 **任务仍需处理，请继续执行**\n"
+                f"请继续当前任务，定位问题并修复，编译自测后输出结果。"
+            )
 
         try:
-            self.bot.create_post(channel_id, message)
+            resp = requests.post(
+                f"{MM_URL}/api/v4/posts",
+                headers=self.headers,
+                json={
+                    "channel_id": channel_id,
+                    "message": message
+                },
+                timeout=10
+            )
+            resp.raise_for_status()
             logger.info(f"  ✅ 已发送激活消息到 {group_name}")
             return True
         except Exception as e:
@@ -1064,7 +1148,7 @@ class ClaudeDrivenScheduler:
             if stop_reason in ("aborted", "error"):
                 logger.info(f"\n  🚨 异常终止: {group_name}-{agent_name}: {task_desc}")
                 logger.info(f"     stopReason={stop_reason} → 立即通知继续处理")
-                self.send_activation_message(group_id, agent_name)
+                self.send_activation_message(group_id, agent_name, task_desc=task_desc, stop_reason=stop_reason)
                 self.clear_activation_attempt(group_id, agent_name)
                 handled += 1
                 continue
@@ -1122,7 +1206,7 @@ class ClaudeDrivenScheduler:
                     logger.info(f"     ✅ 会话已重置")
             else:
                 logger.info(f"     📢 发送激活消息 (第{attempts+1}次)")
-                if self.send_activation_message(group_id, agent_name):
+                if self.send_activation_message(group_id, agent_name, task_desc=task_desc, stop_reason=stop_reason):
                     # 记录激活次数和当前会话活动时间（下次检查时对比是否变化）
                     current_activity = last_activity.isoformat() if last_activity else ""
                     self.set_activation_attempt(group_id, agent_name, attempts + 1, current_activity)
@@ -1230,7 +1314,7 @@ class ClaudeDrivenScheduler:
                     self.send_task_inquiry_message(group_id, agent_name, task_desc)
                 else:
                     # aborted/error 发送激活消息
-                    self.send_activation_message(group_id, agent_name)
+                    self.send_activation_message(group_id, agent_name, task_desc=task_desc, stop_reason=stop_reason)
 
                 # 记录本次激活时间和会话活动时间
                 activity_str = current_activity.isoformat() if current_activity and hasattr(current_activity, 'isoformat') else None
