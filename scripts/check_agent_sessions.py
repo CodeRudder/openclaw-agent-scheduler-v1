@@ -227,6 +227,105 @@ def list_all_agents(limit: int = 0) -> list:
     return agents
 
 
+# ===== 文件内容缓存（用于Edit真实行号）=====
+
+def parse_read_result(content: str) -> dict:
+    """解析Read工具的结果，提取文件内容
+
+    Returns:
+        {file_path: [(line_num, line_content), ...]}
+    """
+    result = {}
+    if not content or not isinstance(content, str):
+        return result
+
+    # 常见格式：
+    # 1. 带行号: "     1→def hello():" 或 "     1│def hello():"
+    # 2. 带行号: "    10 | content"
+    # 3. 无行号: 直接文件内容
+
+    lines = content.split('\n')
+    current_file = None
+    file_lines = []
+
+    import re
+    # 匹配带行号的格式
+    line_pattern = re.compile(r'^\s*(\d+)\s*[→│|]\s*(.*)$')
+
+    for line in lines:
+        # 检测文件路径标记（通常在开头）
+        # 如 "Contents of file.py:" 或 "→ file.py"
+        file_match = re.match(r'^(?:→\s*)?(.+\.py):$', line.strip())
+        if file_match:
+            if current_file and file_lines:
+                result[current_file] = file_lines
+            current_file = file_match.group(1)
+            file_lines = []
+            continue
+
+        # 尝试解析带行号的行
+        match = line_pattern.match(line)
+        if match:
+            line_num = int(match.group(1))
+            line_content = match.group(2)
+            file_lines.append((line_num, line_content))
+        elif current_file is not None and line.strip():
+            # 无行号但有内容，跳过（可能是分隔符等）
+            pass
+
+    # 保存最后一个文件
+    if current_file and file_lines:
+        result[current_file] = file_lines
+
+    return result
+
+
+def find_edit_start_line(file_cache: dict, file_path: str, old_string: str) -> int:
+    """在文件缓存中搜索 old_string 的起始行号
+
+    Args:
+        file_cache: 文件内容缓存
+        file_path: 文件路径
+        old_string: 要替换的旧内容
+
+    Returns:
+        起始行号，未找到返回 0
+    """
+    if not old_string or not file_path:
+        return 0
+
+    # 尝试多种文件路径匹配
+    file_lines = None
+    for cached_path in file_cache:
+        if file_path in cached_path or cached_path in file_path:
+            file_lines = file_cache[cached_path]
+            break
+
+    if not file_lines:
+        return 0
+
+    old_lines = [l for l in old_string.split('\n') if l.strip()]
+    if not old_lines:
+        return 0
+
+    # 取前3行非空行作为匹配特征
+    pattern_lines = old_lines[:3]
+
+    # 在文件中搜索
+    for i in range(len(file_lines) - len(pattern_lines) + 1):
+        match = True
+        for j, pattern in enumerate(pattern_lines):
+            cached_content = file_lines[i + j][1] if i + j < len(file_lines) else ""
+            # 比较时忽略首尾空白
+            if cached_content.strip() != pattern.strip():
+                match = False
+                break
+        if match:
+            return file_lines[i][0]
+
+    return 0
+
+
 # ===== Follow模式 =====
 
 def follow_session(session_path: Path, count: int = 20):
@@ -250,6 +349,7 @@ def follow_session(session_path: Path, count: int = 20):
     print("=" * 80)
 
     last_count = 0
+    file_cache = {}  # 文件内容缓存（用于Edit真实行号）
 
     # 首次显示最后count条消息
     session_info = parse_session_file(session_path)
@@ -259,7 +359,7 @@ def follow_session(session_path: Path, count: int = 20):
     if total > 0:
         display_count = min(count, total)
         for i, raw_msg in enumerate(messages[-display_count:], total - display_count + 1):
-            print_single_message(i, raw_msg)
+            file_cache = print_single_message(i, raw_msg, file_cache)
         last_count = total
 
     # 持续监控
@@ -274,12 +374,24 @@ def follow_session(session_path: Path, count: int = 20):
             # 只显示新增的消息
             new_messages = messages[last_count:]
             for i, raw_msg in enumerate(new_messages, last_count + 1):
-                print_single_message(i, raw_msg)
+                file_cache = print_single_message(i, raw_msg, file_cache)
             last_count = current_count
 
 
-def print_raw_message(line_num: int, raw_msg: dict):
-    """打印原始JSON格式的消息"""
+def print_raw_message(line_num: int, raw_msg: dict, file_cache: dict = None):
+    """打印原始JSON格式的消息
+
+    Args:
+        line_num: 消息序号
+        raw_msg: 原始消息数据
+        file_cache: 文件内容缓存（用于Edit真实行号），会被更新
+
+    Returns:
+        更新后的 file_cache
+    """
+    if file_cache is None:
+        file_cache = {}
+
     msg = raw_msg.get("message", {})
     timestamp = raw_msg.get("timestamp")
 
@@ -305,9 +417,22 @@ def print_raw_message(line_num: int, raw_msg: dict):
     for line in raw_json.split('\n'):
         print(f"    {line}")
 
+    return file_cache
 
-def print_single_message(line_num: int, raw_msg: dict):
-    """打印单条消息（用于Follow模式）"""
+
+def print_single_message(line_num: int, raw_msg: dict, file_cache: dict = None):
+    """打印单条消息（用于Follow模式）
+
+    Args:
+        line_num: 消息序号
+        raw_msg: 原始消息数据
+        file_cache: 文件内容缓存（用于Edit真实行号），会被更新
+
+    Returns:
+        更新后的 file_cache
+    """
+    if file_cache is None:
+        file_cache = {}
     msg = raw_msg.get("message", {})
     timestamp = raw_msg.get("timestamp")
 
@@ -364,12 +489,12 @@ def print_single_message(line_num: int, raw_msg: dict):
                         print(f"    🔧 [工具调用: {name}]")
                         print(f"       💻 command: {inp['command'][:200]}")
                     elif "file_path" in inp and "old_string" in inp:
-                        # Edit 工具 - unified diff 显示
+                        # Edit 工具 - unified diff 显示（带真实行号）
                         print(f"    🔧 [工具调用: {name}]")
                         print(f"       📄 file: {inp['file_path']}")
                         old_str = inp['old_string']
                         new_str = inp.get('new_string', '')
-                        _print_edit_diff(old_str, new_str)
+                        _print_edit_diff(old_str, new_str, file_cache=file_cache, file_path=inp['file_path'])
                     elif "file_path" in inp:
                         # Read/Write 等文件工具
                         print(f"    🔧 [工具调用: {name}] {inp['file_path']}")
@@ -382,7 +507,12 @@ def print_single_message(line_num: int, raw_msg: dict):
                     print(f"    🔧 [工具调用: {name}]")
             elif item_type == "tool_result" or item_type == "toolResult":
                 result = item.get("content", "")
+                tool_use_id = item.get("tool_use_id", "")
                 if isinstance(result, str):
+                    # 尝试解析 Read 工具结果，缓存文件内容
+                    parsed = parse_read_result(result)
+                    if parsed:
+                        file_cache.update(parsed)
                     _print_tool_result(result)
                 else:
                     print(f"    📤 [工具结果]")
@@ -390,6 +520,8 @@ def print_single_message(line_num: int, raw_msg: dict):
         content = extract_content_full(content_raw, max_len=0)
         if content and content.strip():
             _print_content("📝 内容", content)
+
+    return file_cache
 
 
 def _display_width(s: str) -> int:
@@ -428,14 +560,25 @@ def _pad_to_width(s: str, target_width: int) -> str:
     return s + ' ' * (target_width - current_width)
 
 
-def _print_edit_diff(old_str: str, new_str: str, max_lines: int = 100):
+def _print_edit_diff(old_str: str, new_str: str, max_lines: int = 100,
+                     file_cache: dict = None, file_path: str = None):
     """打印 Edit 工具的 unified diff
 
     合并显示 old/new，三种状态：
     - 未修改行：正常文字，注释用灰色
     - 红色背景（全宽）：删除的行
     - 绿色背景（全宽）：新增的行，注释用灰色
+
+    Args:
+        old_str: 原字符串
+        new_str: 新字符串
+        max_lines: 最大显示行数
+        file_cache: 文件内容缓存（用于获取真实行号）
+        file_path: 文件路径（用于匹配缓存）
     """
+    if file_cache is None:
+        file_cache = {}
+
     # ANSI 颜色 - 使用真彩色
     BG_RED = '\033[48;2;70;15;10m'     # 红色背景
     BG_GREEN = '\033[48;2;20;50;15m'   # 绿色背景
@@ -445,8 +588,11 @@ def _print_edit_diff(old_str: str, new_str: str, max_lines: int = 100):
     old_lines = old_str.split('\n') if old_str else []
     new_lines = new_str.split('\n') if new_str else []
 
+    # 查找真实起始行号
+    start_line = find_edit_start_line(file_cache, file_path, old_str)
+
     # 计算 diff（带行号）
-    diff_ops = _compute_diff_with_lines(old_lines, new_lines)
+    diff_ops = _compute_diff_with_lines(old_lines, new_lines, start_line)
 
     # 统计
     removed = sum(1 for op in diff_ops if op[0] == 'del')
@@ -523,13 +669,18 @@ def _print_edit_diff(old_str: str, new_str: str, max_lines: int = 100):
         print(f"       ... 省略 {total_lines - max_lines} 行 ...")
 
 
-def _compute_diff_with_lines(old_lines: list, new_lines: list) -> list:
+def _compute_diff_with_lines(old_lines: list, new_lines: list, start_line: int = 0) -> list:
     """计算 diff 操作列表（带行号）
+
+    Args:
+        old_lines: 原始行列表
+        new_lines: 新行列表
+        start_line: 文件中的真实起始行号（0表示未知，使用相对行号）
 
     返回: [(op, old_num, new_num, line), ...]
     op: 'keep' | 'del' | 'add'
-    old_num: 在 old 中的行号（1-based），删除行和保留行有值
-    new_num: 在 new 中的行号（1-based），新增行和保留行有值
+    old_num: 在文件中的真实行号（如果start_line>0），否则在 old 中的相对行号
+    new_num: 在文件中的真实行号（如果start_line>0），否则在 new 中的相对行号
     """
     m, n = len(old_lines), len(new_lines)
 
@@ -545,19 +696,24 @@ def _compute_diff_with_lines(old_lines: list, new_lines: list) -> list:
     # 回溯生成 diff（带行号）
     diff = []
     i, j = m, n
-    old_line = m
-    new_line = n
 
     while i > 0 or j > 0:
         if i > 0 and j > 0 and old_lines[i-1] == new_lines[j-1]:
-            diff.append(('keep', i, j, old_lines[i-1]))
+            # keep: 使用真实行号（如果start_line > 0）
+            real_old = start_line + i - 1 if start_line > 0 else i
+            real_new = start_line + j - 1 if start_line > 0 else j
+            diff.append(('keep', real_old, real_new, old_lines[i-1]))
             i -= 1
             j -= 1
         elif j > 0 and (i == 0 or dp[i][j-1] >= dp[i-1][j]):
-            diff.append(('add', None, j, new_lines[j-1]))
+            # add: 新增行，使用真实行号
+            real_new = start_line + j - 1 if start_line > 0 else j
+            diff.append(('add', None, real_new, new_lines[j-1]))
             j -= 1
         else:
-            diff.append(('del', i, None, old_lines[i-1]))
+            # del: 删除行，使用真实行号
+            real_old = start_line + i - 1 if start_line > 0 else i
+            diff.append(('del', real_old, None, old_lines[i-1]))
             i -= 1
 
     diff.reverse()
@@ -987,13 +1143,14 @@ def show_session_file(session_path: str, count: int = 10, msg_format: str = "sum
         return
 
     # raw 格式显示原始 JSON
+    file_cache = {}  # 文件内容缓存（用于Edit真实行号）
     if msg_format == "raw":
         for line_num, raw_msg in sliced_msgs:
-            print_raw_message(line_num, raw_msg)
+            file_cache = print_raw_message(line_num, raw_msg, file_cache)
     else:
         # summary/both 格式使用 follow 模式的渲染方式
         for line_num, raw_msg in sliced_msgs:
-            print_single_message(line_num, raw_msg)
+            file_cache = print_single_message(line_num, raw_msg, file_cache)
 
     print(f"\n{'=' * 80}")
     print(f"✅ 共显示 {len(sliced_msgs)} 条消息 / 共 {total_msgs} 条")
@@ -1041,13 +1198,14 @@ def show_last_messages(agent_name: str, count: int = 10, msg_format: str = "summ
         return
 
     # raw 格式显示原始 JSON
+    file_cache = {}  # 文件内容缓存（用于Edit真实行号）
     if msg_format == "raw":
         for line_num, raw_msg in sliced_msgs:
-            print_raw_message(line_num, raw_msg)
+            file_cache = print_raw_message(line_num, raw_msg, file_cache)
     else:
         # summary/both 格式使用 follow 模式的渲染方式
         for line_num, raw_msg in sliced_msgs:
-            print_single_message(line_num, raw_msg)
+            file_cache = print_single_message(line_num, raw_msg, file_cache)
 
     print(f"\n{'=' * 80}")
     print(f"✅ 共显示 {len(sliced_msgs)} 条消息 / 共 {total_msgs} 条")
