@@ -2,9 +2,11 @@
 """
 检查并恢复异常停止的agent会话
 
-检测条件（满足任一即触发重置）：
-  1. 连续N条 assistant 消息内容为空 且 stopReason=stop（自动停止）
-  2. 连续 T 分钟内没有新的 assistant 消息（无响应超时）
+检测条件（三个条件同时满足才触发重置，AND关系）：
+  A. 超过30分钟无有效assistant消息（有效=文本内容>=20字符）
+     且在2小时活跃窗口内（避免误重置长期空闲的agent）
+  B. 最近5条消息中，内容过短的消息 >= 3条
+  C. 最近5条消息中，stopReason=stop 次数 >= 2次
 
 恢复方式：重命名会话文件为backup（agent下次启动时会创建新会话）
 
@@ -18,13 +20,10 @@
   # 检查指定agent
   python3 scripts/check_and_recover_agent_sessions.py --agent fullstack-dev
 
-  # 调整空消息检测阈值（默认3次）
-  python3 scripts/check_and_recover_agent_sessions.py --threshold 3
-
-  # 调整无响应超时阈值（默认30分钟，0=禁用）
+  # 调整超时阈值（默认30分钟）
   python3 scripts/check_and_recover_agent_sessions.py --timeout 30
 
-  # 详细输出
+  # 详细输出（显示每条消息状态及条件判断）
   python3 scripts/check_and_recover_agent_sessions.py -v
 """
 
@@ -38,14 +37,21 @@ from datetime import datetime, timezone
 # Agent会话目录
 AGENTS_BASE = Path.home() / ".openclaw" / "agents"
 
-# 默认检测阈值：连续N条空内容assistant消息触发重置
-DEFAULT_EMPTY_THRESHOLD = 3
-
 # 默认无响应超时阈值（分钟），0=禁用
+# 判断条件：最近N分钟内无有效assistant消息（有实质内容且足够长）
 DEFAULT_TIMEOUT_MINUTES = 30
 
 # 活跃窗口：只对最近N小时内有过活动的会话进行超时重置（避免误重置长期空闲的agent）
 DEFAULT_ACTIVE_WINDOW_HOURS = 2
+
+# 有效消息最短字符数：文本内容低于此长度视为无效（如"收到"、"NO_REPLY"等）
+DEFAULT_MIN_VALID_LENGTH = 20
+
+# 频繁stop阈值：最近N条消息中stop次数达到此值认为"频繁stop"
+DEFAULT_FREQUENT_STOP_COUNT = 2
+
+# 检查最近N条assistant消息（用于频繁stop和内容过短判断）
+DEFAULT_RECENT_MSG_COUNT = 5
 
 logging.basicConfig(
     level=logging.INFO,
@@ -118,11 +124,27 @@ def get_session_files(agent_name: str) -> list:
     return sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)
 
 
+def _get_text_length(content) -> int:
+    """获取content中text内容的总字符数"""
+    if isinstance(content, str):
+        return len(content.strip())
+    if isinstance(content, list):
+        total = 0
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                total += len(item.get("text", "").strip())
+            elif isinstance(item, str):
+                total += len(item.strip())
+        return total
+    return 0
+
+
 def get_last_assistant_messages(jsonl_file: Path, count: int = 5) -> list:
     """获取最后N条assistant消息
 
     Returns:
-        [{"content_empty": bool, "stop_reason": str, "content_preview": str}, ...]
+        [{"content_empty": bool, "content_length": int, "stop_reason": str,
+          "content_preview": str, "content_type": list, "timestamp": datetime or None}, ...]
         按时间顺序（最旧→最新）
     """
     try:
@@ -139,6 +161,7 @@ def get_last_assistant_messages(jsonl_file: Path, count: int = 5) -> list:
                         if message.get("role") == "assistant":
                             content = message.get("content", "")
                             empty = is_content_empty(content)
+                            content_length = _get_text_length(content)
 
                             # 生成内容预览
                             preview = ""
@@ -154,11 +177,25 @@ def get_last_assistant_messages(jsonl_file: Path, count: int = 5) -> list:
                             # 兼容两种命名：stopReason (OpenClaw) 和 stop_reason (Claude)
                             stop_reason = message.get("stopReason") or message.get("stop_reason")
 
+                            # 解析时间戳
+                            ts = msg.get("timestamp")
+                            timestamp = None
+                            if ts:
+                                try:
+                                    if isinstance(ts, (int, float)):
+                                        timestamp = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+                                    elif isinstance(ts, str):
+                                        timestamp = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                                except Exception:
+                                    pass
+
                             assistant_msgs.append({
                                 "content_empty": empty,
+                                "content_length": content_length,
                                 "stop_reason": stop_reason,
                                 "content_preview": preview.replace('\n', ' '),
-                                "content_type": _get_content_types(content)
+                                "content_type": _get_content_types(content),
+                                "timestamp": timestamp
                             })
                 except json.JSONDecodeError:
                     continue
@@ -175,11 +212,20 @@ def _get_content_types(content) -> list:
     return ["str"] if isinstance(content, str) else []
 
 
-def check_agent_session(agent_name: str, threshold: int = DEFAULT_EMPTY_THRESHOLD,
+def check_agent_session(agent_name: str,
                         timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES,
                         active_window_hours: int = DEFAULT_ACTIVE_WINDOW_HOURS,
+                        min_valid_length: int = DEFAULT_MIN_VALID_LENGTH,
+                        frequent_stop_count: int = DEFAULT_FREQUENT_STOP_COUNT,
+                        recent_msg_count: int = DEFAULT_RECENT_MSG_COUNT,
                         verbose: bool = False) -> dict:
     """检查单个agent的最新会话
+
+    触发重置条件（三个条件同时满足，AND关系）：
+      A. 超过 timeout_minutes 分钟无有效assistant消息（有效=文本长度>=min_valid_length）
+         且在 active_window_hours 活跃窗口内（避免误重置长期空闲的agent）
+      B. 最近 recent_msg_count 条消息中，有效内容过短的消息 >= 3 条
+      C. 最近 recent_msg_count 条消息中，stopReason=stop 的次数 >= frequent_stop_count
 
     Returns:
         {
@@ -188,8 +234,9 @@ def check_agent_session(agent_name: str, threshold: int = DEFAULT_EMPTY_THRESHOL
             "should_reset": bool,
             "reason": str,
             "last_messages": [...],
-            "consecutive_empty": int,
-            "minutes_since_last_msg": float or None
+            "minutes_since_last_valid_msg": float or None,
+            "short_msg_count": int,
+            "stop_count": int
         }
     """
     result = {
@@ -198,8 +245,9 @@ def check_agent_session(agent_name: str, threshold: int = DEFAULT_EMPTY_THRESHOL
         "should_reset": False,
         "reason": "",
         "last_messages": [],
-        "consecutive_empty": 0,
-        "minutes_since_last_msg": None
+        "minutes_since_last_valid_msg": None,
+        "short_msg_count": 0,
+        "stop_count": 0
     }
 
     session_files = get_session_files(agent_name)
@@ -210,78 +258,93 @@ def check_agent_session(agent_name: str, threshold: int = DEFAULT_EMPTY_THRESHOL
     latest_file = session_files[0]
     result["session_file"] = str(latest_file)
 
-    # ===== 检测条件1：无响应超时 =====
-    if timeout_minutes > 0:
-        last_time = get_last_assistant_message_time(latest_file)
-        if last_time:
-            now = datetime.now(tz=timezone.utc)
-            minutes_since = (now - last_time).total_seconds() / 60
-            result["minutes_since_last_msg"] = round(minutes_since, 1)
-            if verbose:
-                logger.info(f"  最后assistant消息：{int(minutes_since)}分钟前")
-
-            # 只检查"活跃窗口"内的会话（最近 active_window_hours 小时内有活动）
-            # 避免误重置长期空闲的agent
-            is_in_active_window = minutes_since <= active_window_hours * 60
-            if minutes_since >= timeout_minutes and is_in_active_window:
-                result["should_reset"] = True
-                result["reason"] = (
-                    f"已{int(minutes_since)}分钟无assistant消息"
-                    f"（超过阈值{timeout_minutes}分钟），疑似无响应停止"
-                )
-                return result
-        else:
-            # 无assistant消息，检查文件修改时间
-            mtime = latest_file.stat().st_mtime
-            minutes_since = (datetime.now() - datetime.fromtimestamp(mtime)).total_seconds() / 60
-            result["minutes_since_last_msg"] = round(minutes_since, 1)
-            if verbose:
-                logger.info(f"  无assistant消息，文件修改：{int(minutes_since)}分钟前")
-
-    # ===== 检测条件2：连续空消息 =====
-    # 获取最后 threshold 条 assistant 消息
-    last_msgs = get_last_assistant_messages(latest_file, count=threshold)
+    # 获取最近 recent_msg_count 条assistant消息（含content_length和timestamp）
+    last_msgs = get_last_assistant_messages(latest_file, count=recent_msg_count)
     result["last_messages"] = last_msgs
 
     if not last_msgs:
         result["reason"] = "无assistant消息"
         return result
 
-    # 统计从末尾开始连续空内容消息数
-    consecutive_empty = 0
+    # ===== 条件A：超过 timeout_minutes 分钟无有效消息（有效=长度>=min_valid_length） =====
+    # 找最后一条有效消息的时间戳
+    last_valid_ts = None
     for msg in reversed(last_msgs):
-        if msg["content_empty"]:
-            consecutive_empty += 1
-        else:
+        if msg["content_length"] >= min_valid_length and msg["timestamp"]:
+            last_valid_ts = msg["timestamp"]
             break
 
-    result["consecutive_empty"] = consecutive_empty
+    # 如果最近N条都没有有效消息，尝试从文件级别找
+    if last_valid_ts is None:
+        last_valid_ts = get_last_assistant_message_time(latest_file)
 
-    if verbose and last_msgs:
-        logger.info(f"  最后{len(last_msgs)}条assistant消息：")
+    now = datetime.now(tz=timezone.utc)
+    if last_valid_ts:
+        minutes_since_valid = (now - last_valid_ts).total_seconds() / 60
+    else:
+        # 无任何assistant消息，用文件修改时间
+        mtime = latest_file.stat().st_mtime
+        minutes_since_valid = (datetime.now() - datetime.fromtimestamp(mtime)).total_seconds() / 60
+
+    result["minutes_since_last_valid_msg"] = round(minutes_since_valid, 1)
+
+    # 计算活跃窗口：以最后任意assistant消息时间为基准
+    last_any_ts = None
+    for msg in reversed(last_msgs):
+        if msg["timestamp"]:
+            last_any_ts = msg["timestamp"]
+            break
+    if last_any_ts is None:
+        last_any_ts = get_last_assistant_message_time(latest_file)
+
+    if last_any_ts:
+        minutes_since_any = (now - last_any_ts).total_seconds() / 60
+    else:
+        minutes_since_any = minutes_since_valid
+
+    is_in_active_window = minutes_since_any <= active_window_hours * 60
+    cond_a = (minutes_since_valid >= timeout_minutes) and is_in_active_window
+
+    # ===== 条件B：最近N条消息中，内容过短（<min_valid_length）的消息 >= 3条 =====
+    SHORT_MSG_THRESHOLD = 3
+    short_count = sum(1 for msg in last_msgs if msg["content_length"] < min_valid_length)
+    result["short_msg_count"] = short_count
+    cond_b = short_count >= SHORT_MSG_THRESHOLD
+
+    # ===== 条件C：最近N条消息中，stopReason=stop 次数 >= frequent_stop_count =====
+    stop_count = sum(1 for msg in last_msgs if msg["stop_reason"] == "stop")
+    result["stop_count"] = stop_count
+    cond_c = stop_count >= frequent_stop_count
+
+    if verbose:
+        logger.info(f"  最近{len(last_msgs)}条assistant消息：")
         for i, msg in enumerate(last_msgs, 1):
-            empty_mark = "空" if msg["content_empty"] else "有内容"
+            length_mark = f"{msg['content_length']}字"
             types_str = ",".join(msg["content_type"]) if msg["content_type"] else "-"
             preview = f'"{msg["content_preview"][:40]}"' if msg["content_preview"] else ""
-            logger.info(f"    [{i}] {empty_mark} | stopReason={msg['stop_reason']} | types=[{types_str}] {preview}")
+            logger.info(f"    [{i}] {length_mark} | stopReason={msg['stop_reason']} | types=[{types_str}] {preview}")
+        logger.info(f"  条件A（超时{timeout_minutes}分钟无有效消息）: {int(minutes_since_valid)}分钟 → {'✓' if cond_a else '✗'}")
+        logger.info(f"  条件B（最近{len(last_msgs)}条中{short_count}条过短，阈值{SHORT_MSG_THRESHOLD}）: {'✓' if cond_b else '✗'}")
+        logger.info(f"  条件C（最近{len(last_msgs)}条中stop={stop_count}次，阈值{frequent_stop_count}）: {'✓' if cond_c else '✗'}")
 
-    if consecutive_empty < threshold:
-        result["reason"] = f"连续���消息数({consecutive_empty}) < 阈值({threshold})"
-        return result
+    # ===== 三个条件同时满足才触发重置 =====
+    if cond_a and cond_b and cond_c:
+        result["should_reset"] = True
+        result["reason"] = (
+            f"三条件同时满足：A={int(minutes_since_valid)}分钟无有效消息，"
+            f"B={short_count}/{len(last_msgs)}条内容过短，"
+            f"C={stop_count}/{len(last_msgs)}次stop，疑似无响应停止"
+        )
+    else:
+        unmet = []
+        if not cond_a:
+            unmet.append(f"A（{int(minutes_since_valid)}分钟<阈值{timeout_minutes}分钟或不在活跃窗口）")
+        if not cond_b:
+            unmet.append(f"B（{short_count}条过短<阈值{SHORT_MSG_THRESHOLD}条）")
+        if not cond_c:
+            unmet.append(f"C（stop={stop_count}次<阈值{frequent_stop_count}次）")
+        result["reason"] = f"未满足条件：{', '.join(unmet)}"
 
-    # 检查最后一条消息的stopReason（必须是stop才认为是自动停止）
-    last_msg = last_msgs[-1]
-    stop_reason = last_msg["stop_reason"]
-    if stop_reason not in ("stop", "aborted", "error", None):
-        result["reason"] = f"连续空消息{consecutive_empty}条，但stopReason={stop_reason}（不是异常停止）"
-        return result
-
-    # 满足重置条件
-    result["should_reset"] = True
-    result["reason"] = (
-        f"连续{consecutive_empty}条assistant消息内容为空，"
-        f"stopReason={stop_reason}，疑似异常停止"
-    )
     return result
 
 
@@ -321,17 +384,22 @@ def list_all_agents() -> list:
     return sorted(agents)
 
 
-def run_check(agents: list = None, threshold: int = DEFAULT_EMPTY_THRESHOLD,
+def run_check(agents: list = None,
               timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES,
               active_window_hours: int = DEFAULT_ACTIVE_WINDOW_HOURS,
+              min_valid_length: int = DEFAULT_MIN_VALID_LENGTH,
+              frequent_stop_count: int = DEFAULT_FREQUENT_STOP_COUNT,
+              recent_msg_count: int = DEFAULT_RECENT_MSG_COUNT,
               dry_run: bool = False, verbose: bool = False) -> dict:
     """执行检查和恢复
 
     Args:
         agents: 指定检查的agent列表，None=全部
-        threshold: 连续空消息阈值
-        timeout_minutes: 无响应超时阈值（分钟），0=禁用
+        timeout_minutes: 无有效消息超时阈值（分钟）
         active_window_hours: 活跃窗口（小时），只检测此窗口内有活动的agent
+        min_valid_length: 有效消息最短字符数
+        frequent_stop_count: 频繁stop阈值
+        recent_msg_count: 检查最近N条消息
         dry_run: 只检查不实际重置
         verbose: 详细输出
 
@@ -354,10 +422,15 @@ def run_check(agents: list = None, threshold: int = DEFAULT_EMPTY_THRESHOLD,
         else:
             logger.debug(f"检查 {agent_name}...")
 
-        result = check_agent_session(agent_name, threshold=threshold,
-                                     timeout_minutes=timeout_minutes,
-                                     active_window_hours=active_window_hours,
-                                     verbose=verbose)
+        result = check_agent_session(
+            agent_name,
+            timeout_minutes=timeout_minutes,
+            active_window_hours=active_window_hours,
+            min_valid_length=min_valid_length,
+            frequent_stop_count=frequent_stop_count,
+            recent_msg_count=recent_msg_count,
+            verbose=verbose
+        )
         summary["results"].append(result)
 
         if result["should_reset"]:
@@ -393,10 +466,7 @@ def main():
   # 检查多个agent
   %(prog)s --agent fullstack-dev --agent qa
 
-  # 调整检测阈值（连续N条空内容，默认3）
-  %(prog)s --threshold 3
-
-  # 详细输出（显示每条消息状态）
+  # 详细输出（显示每条消息状态及条件判断）
   %(prog)s --dry-run -v
         """
     )
@@ -406,19 +476,32 @@ def main():
         help="指定检查的agent（可多次使用）。默认检查所有agent"
     )
     parser.add_argument(
-        "--threshold", "-t", type=int, default=DEFAULT_EMPTY_THRESHOLD,
-        help=f"连续空消息阈值（默认{DEFAULT_EMPTY_THRESHOLD}）。达到此数触发重置"
-    )
-    parser.add_argument(
         "--timeout", type=int, default=DEFAULT_TIMEOUT_MINUTES,
-        help=f"无响应超时阈值（分钟，默认{DEFAULT_TIMEOUT_MINUTES}，0=禁用）。"
-             f"超过此时间无新assistant消息则重置会话"
+        help=f"无有效消息超时阈值（分钟，默认{DEFAULT_TIMEOUT_MINUTES}）。"
+             f"超过此时间无有效assistant消息���为条件A满足"
     )
     parser.add_argument(
         "--active-window", type=int, default=DEFAULT_ACTIVE_WINDOW_HOURS,
         dest="active_window",
         help=f"活跃窗口（小时，默认{DEFAULT_ACTIVE_WINDOW_HOURS}）。"
-             f"只对最近N小时内有过活动的会话进行超时检测，避免误重置长期空闲的agent"
+             f"只对最近N小时内有过活动的会话进行检测，避免误重置长期空闲的agent"
+    )
+    parser.add_argument(
+        "--min-valid-length", type=int, default=DEFAULT_MIN_VALID_LENGTH,
+        dest="min_valid_length",
+        help=f"有效消息最短字符数（默认{DEFAULT_MIN_VALID_LENGTH}）。"
+             f"文本内容低于此长度视为过短（如'收到'、'NO_REPLY'等）"
+    )
+    parser.add_argument(
+        "--frequent-stop", type=int, default=DEFAULT_FREQUENT_STOP_COUNT,
+        dest="frequent_stop_count",
+        help=f"频繁stop阈值（默认{DEFAULT_FREQUENT_STOP_COUNT}）。"
+             f"最近N条消息中stop次数达到此值视为条件C满足"
+    )
+    parser.add_argument(
+        "--recent-count", type=int, default=DEFAULT_RECENT_MSG_COUNT,
+        dest="recent_msg_count",
+        help=f"检查最近N条消息（默认{DEFAULT_RECENT_MSG_COUNT}）。用于条件B和C的判断"
     )
     parser.add_argument(
         "--dry-run", "-n", action="store_true",
@@ -426,7 +509,7 @@ def main():
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
-        help="详细输出每条消息状态"
+        help="详细输出每条消息状态及条件判断"
     )
     parser.add_argument(
         "--list", "-l", action="store_true",
@@ -453,18 +536,23 @@ def main():
 
     # 执行检查
     dry_label = " [dry-run]" if args.dry_run else ""
-    timeout_label = f"，或{args.timeout}分钟无响应（{args.active_window}小时活跃窗口）" if args.timeout > 0 else ""
     print(f"{'=' * 60}")
     print(f"🔍 Agent会话健康检查{dry_label}")
-    print(f"   阈值: 连续{args.threshold}条空内容assistant消息 + 自动停止{timeout_label}")
+    print(f"   触发条件（AND）：")
+    print(f"     A. 超过{args.timeout}分钟无有效assistant消息（有效={args.min_valid_length}+字符）")
+    print(f"     B. 最近{args.recent_msg_count}条消息中≥3条内容过短")
+    print(f"     C. 最近{args.recent_msg_count}条消息中stop≥{args.frequent_stop_count}次")
+    print(f"   活跃窗口: {args.active_window}小时")
     print(f"   目录: {AGENTS_BASE}")
     print(f"{'=' * 60}")
 
     summary = run_check(
         agents=args.agents,
-        threshold=args.threshold,
         timeout_minutes=args.timeout,
         active_window_hours=args.active_window,
+        min_valid_length=args.min_valid_length,
+        frequent_stop_count=args.frequent_stop_count,
+        recent_msg_count=args.recent_msg_count,
         dry_run=args.dry_run,
         verbose=args.verbose
     )
