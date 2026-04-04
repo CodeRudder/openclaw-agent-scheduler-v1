@@ -102,6 +102,7 @@ FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 
 # 调度配置
 SESSION_TIMEOUT_MINUTES = CONFIG.get("scheduler", {}).get("session_timeout_minutes", 10)
+SESSION_RESET_TIMEOUT_MINUTES = CONFIG.get("scheduler", {}).get("session_reset_timeout_minutes", 30)
 MESSAGES_PER_GROUP = CONFIG.get("scheduler", {}).get("messages_per_group", 20)
 
 # 日志配置
@@ -1291,6 +1292,15 @@ class ClaudeDrivenScheduler:
                 logger.info(f"     ✅ 激活生效（会话活动已更新），重置激活计数")
                 attempts = 0
 
+            # 超过重置阈值（默认30分钟）：直接重置会话，不再尝试激活
+            if time_diff >= SESSION_RESET_TIMEOUT_MINUTES:
+                logger.info(f"     🔄 超时{int(time_diff)}分钟（≥{SESSION_RESET_TIMEOUT_MINUTES}分钟），直接重置会话")
+                if self.reset_agent_session(str(latest_file), agent_name):
+                    self.clear_activation_attempt(group_id, agent_name)
+                    logger.info(f"     ✅ 会话已重置")
+                handled += 1
+                continue
+
             if attempts >= 2:
                 logger.info(f"     🔄 已激活{attempts}次仍无响应，重置会话")
                 if self.reset_agent_session(str(latest_file), agent_name):
@@ -1394,6 +1404,20 @@ class ClaudeDrivenScheduler:
                         minutes_since = (datetime.now() - last_time).total_seconds() / 60
                         if minutes_since < ACTIVATION_COOLDOWN_MINUTES:
                             logger.info(f"  ⏳ {group_name}-{agent_name} 在冷却期内（{int(minutes_since)}分钟前已激活），跳过")
+                            continue
+                        # 超过重置阈值：激活后仍无响应超过30分钟，重置会话
+                        if minutes_since >= SESSION_RESET_TIMEOUT_MINUTES:
+                            logger.info(f"\n  🔄 {group_name}-{agent_name}: 激活后{int(minutes_since)}分钟仍无响应，重置会话")
+                            agents_base = Path.home() / ".openclaw" / "agents"
+                            session_dir = agents_base / agent_name / "sessions"
+                            if session_dir.exists():
+                                session_files = [f for f in session_dir.glob("*.jsonl") if "backup" not in f.name]
+                                if session_files:
+                                    latest = max(session_files, key=lambda x: x.stat().st_mtime)
+                                    if self.reset_agent_session(str(latest), agent_name):
+                                        self.clear_activation_attempt(group_id, agent_name)
+                                        logger.info(f"     ✅ 会话已重置，agent下次启动时开始新会话")
+                            handled += 1
                             continue
                     except Exception:
                         pass
