@@ -116,6 +116,8 @@ MESSAGES_PER_GROUP = CONFIG.get("scheduler", {}).get("messages_per_group", 20)
 # 日志配置
 logging.basicConfig(
     level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
         logging.FileHandler(LOG_DIR / f"claude_scheduler_{datetime.now().strftime('%Y-%m-%d')}.log"),
         logging.StreamHandler()
