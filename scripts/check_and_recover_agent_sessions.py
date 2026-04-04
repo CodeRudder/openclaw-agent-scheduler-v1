@@ -56,7 +56,7 @@ DEFAULT_RECENT_MSG_COUNT = 5
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(message)s",
-    datefmt="%H:%M:%S"
+    datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
 
