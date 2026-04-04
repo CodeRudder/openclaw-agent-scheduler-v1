@@ -25,6 +25,14 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
+# 导入会话健康检查模块
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from check_and_recover_agent_sessions import run_check as _run_session_health_check
+    _SESSION_HEALTH_CHECK_AVAILABLE = True
+except ImportError:
+    _SESSION_HEALTH_CHECK_AVAILABLE = False
+
 # 加载.env文件
 try:
     from dotenv import load_dotenv
@@ -2383,11 +2391,67 @@ data/bugs/TC-XXX_description.md
         logger.info("=" * 70)
         logger.info(f"🏁 调度结束 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+    def _run_session_health_check(self):
+        """调用会话健康检查脚本，检测并重置异常停止的agent会话
+
+        检测条件（三个同时满足）：
+          A. 超过30分钟无有效assistant消息
+          B. 最近5条消息中≥3条内容过短
+          C. 最近5条消息中stop≥2次
+        """
+        if not _SESSION_HEALTH_CHECK_AVAILABLE:
+            logger.debug("会话健康检查模块不可用，跳过")
+            return
+
+        logger.info("\n🏥 会话健康检查...")
+        try:
+            summary = _run_session_health_check(dry_run=False, verbose=False)
+            checked = summary.get("checked", 0)
+            reset = summary.get("reset", 0)
+            skipped = summary.get("skipped", 0)
+
+            if reset > 0:
+                # 记录被重置的agent详情
+                reset_agents = [
+                    r["agent"] for r in summary.get("results", [])
+                    if r.get("should_reset") and r.get("session_file")
+                ]
+                logger.info(f"  ⚠️ 会话健康检查: 检查{checked}个agent，重置{reset}个异常会话")
+                for agent_name in reset_agents:
+                    result = next((r for r in summary["results"] if r["agent"] == agent_name), {})
+                    logger.info(f"    🔄 {agent_name}: {result.get('reason', '')}")
+
+                # 记录到通知历史
+                history = self.notification_history.setdefault("session_health_resets", [])
+                history.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "checked": checked,
+                    "reset": reset,
+                    "agents": reset_agents,
+                    "reasons": {
+                        r["agent"]: r.get("reason", "")
+                        for r in summary.get("results", [])
+                        if r.get("should_reset")
+                    }
+                })
+                # 只保留最近20条记录
+                if len(history) > 20:
+                    self.notification_history["session_health_resets"] = history[-20:]
+                self._save_notification_history()
+            else:
+                logger.info(f"  ✅ 会话健康检查: {checked}个agent均正常，无需重置")
+
+        except Exception as e:
+            logger.error(f"  ❌ 会话健康检查失败: {e}")
+
     def run(self):
         """执行调度 - 两阶段优化：先快速检查活跃任务，必要时再完整分析"""
         logger.info("=" * 70)
         logger.info(f"🕐 Claude驱动调度开始 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 70)
+
+        # ========== 前置步骤：会话健康检查 ==========
+        self._run_session_health_check()
 
         # ========== 获取有活跃任务的agent ==========
         active_agents_by_group = self._get_active_task_agents()
