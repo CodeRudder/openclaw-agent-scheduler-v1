@@ -55,13 +55,14 @@ DEFAULT_RECENT_MSG_COUNT = 5
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(message)s"
+    format="%(asctime)s %(message)s",
+    datefmt="%H:%M:%S"
 )
 logger = logging.getLogger(__name__)
 
 
 def get_last_assistant_message_time(jsonl_file: Path) -> datetime:
-    """获取最后一条assistant消息的时间戳
+    """获取最后一条assistant消息的时间戳（任意内容）
 
     Returns:
         最后一条assistant消息的时间（带时区），未找到返回None
@@ -91,6 +92,44 @@ def get_last_assistant_message_time(jsonl_file: Path) -> datetime:
     except Exception as e:
         logger.debug(f"读取时间戳失败 {jsonl_file}: {e}")
     return last_time
+
+
+def get_last_valid_assistant_message_time(jsonl_file: Path,
+                                          min_valid_length: int = DEFAULT_MIN_VALID_LENGTH) -> datetime:
+    """获取最后一条有效assistant消息的时间戳（文本长度>=min_valid_length）
+
+    扫描整个文件，避免只看最近N条消息导致遗漏历史有效消息。
+
+    Returns:
+        最后一条有效assistant消息的时间（带时区），未找到返回None
+    """
+    last_valid_time = None
+    try:
+        with open(jsonl_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                    if msg.get("type") == "message":
+                        message = msg.get("message", {})
+                        if message.get("role") == "assistant":
+                            content = message.get("content", "")
+                            if _get_text_length(content) >= min_valid_length:
+                                ts = msg.get("timestamp")
+                                if ts:
+                                    if isinstance(ts, (int, float)):
+                                        last_valid_time = datetime.fromtimestamp(
+                                            ts / 1000, tz=timezone.utc)
+                                    elif isinstance(ts, str):
+                                        last_valid_time = datetime.fromisoformat(
+                                            ts.replace('Z', '+00:00'))
+                except json.JSONDecodeError:
+                    continue
+    except Exception as e:
+        logger.debug(f"读取有效消息时间戳失败 {jsonl_file}: {e}")
+    return last_valid_time
 
 
 def is_content_empty(content) -> bool:
@@ -267,28 +306,20 @@ def check_agent_session(agent_name: str,
         return result
 
     # ===== 条件A：超过 timeout_minutes 分钟无有效消息（有效=长度>=min_valid_length） =====
-    # 找最后一条有效消息的时间戳
-    last_valid_ts = None
-    for msg in reversed(last_msgs):
-        if msg["content_length"] >= min_valid_length and msg["timestamp"]:
-            last_valid_ts = msg["timestamp"]
-            break
-
-    # 如果最近N条都没有有效消息，尝试从文件级别找
-    if last_valid_ts is None:
-        last_valid_ts = get_last_assistant_message_time(latest_file)
+    # 扫描整个文件找最后一条有效消息（避免只看最近N条导致遗漏历史有效消息）
+    last_valid_ts = get_last_valid_assistant_message_time(latest_file, min_valid_length)
 
     now = datetime.now(tz=timezone.utc)
     if last_valid_ts:
         minutes_since_valid = (now - last_valid_ts).total_seconds() / 60
     else:
-        # 无任何assistant消息，用文件修改时间
+        # 无任何有效消息，用文件修改时间
         mtime = latest_file.stat().st_mtime
         minutes_since_valid = (datetime.now() - datetime.fromtimestamp(mtime)).total_seconds() / 60
 
     result["minutes_since_last_valid_msg"] = round(minutes_since_valid, 1)
 
-    # 计算活跃窗口：以最后任意assistant消息时间为基准
+    # 计算活跃窗口：以最后任意assistant消息时间为基准（用最近N条中最新的）
     last_any_ts = None
     for msg in reversed(last_msgs):
         if msg["timestamp"]:

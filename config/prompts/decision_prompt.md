@@ -909,7 +909,7 @@ QA的验收工作有明确的先后顺序，**严禁跳过任何环节**：
 - ✅ 每一个失败的用例都必须有对应的BUG记录
 
 ## 输出格式
-返回JSON对象，包含分析报告、决策列表和更新的调度计划：
+返回JSON对象，包含分析报告、决策列表、更新的调度计划和需要执行的Actions：
 ```json
 {
   "analysis": {
@@ -954,6 +954,15 @@ QA的验收工作有明确的先后顺序，**严禁跳过任何环节**：
       "source_group": "来源群组ID"
     }
   ],
+  "actions": [
+    {
+      "id": "a1",
+      "type": "reset_session",
+      "agent": "fullstack-dev",
+      "reason": "超过30分钟无进展，会话疑似卡死",
+      "depends_on": []
+    }
+  ],
   "updated_plan": {
     "current_version": "当前版本号",
     "overall_status": "in_progress/completed/blocked",
@@ -971,6 +980,35 @@ QA的验收工作有明确的先后顺序，**严禁跳过任何环节**：
   }
 }
 ```
+
+### Actions字段说明
+
+`actions` 是调度系统直接执行的操作列表（区别于 `decisions` 的跨群通知）。
+
+**当前支持的Action类型**：
+
+| type | 说明 | 必填字段 |
+|------|------|---------|
+| `reset_session` | 重置agent会话文件（重命名为backup，agent下次启动时创建新会话） | `agent` |
+
+**Action字段**：
+- `id`：Action标识（可选，用于 `depends_on` 引用）
+- `type`：操作类型
+- `agent`：目标agent名称
+- `reason`：执行原因（用于日志记录）
+- `depends_on`：依赖的前置Action id列表（可选，系统按依赖顺序执行）
+
+**触发 `reset_session` 的条件（同时满足）**：
+1. agent在调度计划中有 `in_progress` 任务
+2. 该agent的会话活动时间超过30分钟无进展（会话消息时间戳停滞）
+3. 最近消息内容过短（如只回复"收到"、"好的"等）且频繁stop
+
+**禁止触发 `reset_session` 的情况**：
+- agent会话正常活跃（最近有实质性消息）
+- agent没有分配任务（空闲状态）
+- 会话刚刚启动（<5分钟）
+
+如果不需要执行任何Action，`actions` 返回空数组 `[]`。
 
 如果所有群都不需要通知，decisions返回空数组：
 ```json

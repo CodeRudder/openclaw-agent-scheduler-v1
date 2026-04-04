@@ -1544,7 +1544,7 @@ class ClaudeDrivenScheduler:
                            notification_history: Dict,
                            scheduling_plan: Dict = None) -> tuple:
         """综合所有群消息，一次AI调用做出全局决策。
-        返回: (decisions: List[SchedulingDecision], analysis: Dict, updated_plan: Dict)
+        返回: (decisions: List[SchedulingDecision], analysis: Dict, updated_plan: Dict, actions: List[Dict])
         """
         """综合所有群消息，一次AI调用做出全局决策"""
 
@@ -1707,6 +1707,11 @@ class ClaudeDrivenScheduler:
             # 提取更新后的调度计划
             updated_plan = parsed.get("updated_plan", {})
 
+            # 提取Actions列表（AI主动要求执行的操作）
+            actions_data = parsed.get("actions", [])
+            if not isinstance(actions_data, list):
+                actions_data = []
+
             # 提取决策列表
             decisions_data = parsed.get("decisions", [])
             if not isinstance(decisions_data, list):
@@ -1730,11 +1735,11 @@ class ClaudeDrivenScheduler:
                     qa_raw_messages="",
                     bug_doc_complete=d.get("bug_doc_complete", True)
                 ))
-            return results, analysis, updated_plan
+            return results, analysis, updated_plan, actions_data
 
         except Exception as e:
             logger.error(f"综合分析失败: {e}")
-            return [], {}, {}
+            return [], {}, {}, []
 
     def review_raw_message_with_ai(self, raw_content: str, decision: SchedulingDecision) -> str:
         """让AI审核并处理转发的原始消息，确保内容准确无歧义"""
@@ -2308,10 +2313,13 @@ data/bugs/TC-XXX_description.md
         # 有异常情况 或 消息足够多(>5条)，都进行快速AI决策
         if has_timeout or has_error or total_msgs >= 5:
             logger.info(f"\n🧠 快速分析活跃任务群消息...")
-            decisions, analysis, updated_plan = self.analyze_with_claude(
+            decisions, analysis, updated_plan, actions = self.analyze_with_claude(
                 quick_group_messages, quick_session_status, self.notification_history,
                 self.scheduling_plan
             )
+            # 执行AI返回的Actions
+            if actions:
+                self.execute_actions(actions)
             # 返回决策，need_full_analysis=False（已做出决策），同时返回消息数量
             return decisions, False, quick_session_status, total_msgs
 
@@ -2345,10 +2353,14 @@ data/bugs/TC-XXX_description.md
 
         # AI全面分析
         logger.info(f"\n🧠 综合分析所有群消息...")
-        decisions, analysis, updated_plan = self.analyze_with_claude(
+        decisions, analysis, updated_plan, actions = self.analyze_with_claude(
             all_group_messages, all_session_status, self.notification_history,
             self.scheduling_plan
         )
+
+        # 执行AI返回的Actions
+        if actions:
+            self.execute_actions(actions)
 
         # 更新调度计划
         if updated_plan:
@@ -2390,6 +2402,130 @@ data/bugs/TC-XXX_description.md
         logger.info(f"  发送通知: {notifications_sent}个")
         logger.info("=" * 70)
         logger.info(f"🏁 调度结束 @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    def execute_actions(self, actions: List[Dict]) -> Dict:
+        """执行AI返回的Actions列表，支持依赖顺序编排
+
+        Action格式：
+        {
+            "type": "reset_session",       # 操作类型
+            "agent": "fullstack-dev",      # 目标agent
+            "reason": "30分钟无进展",       # 原因说明
+            "depends_on": ["action_id"],   # 依赖的前置action id（可选）
+            "id": "a1"                     # action标识（可选，用于依赖引用）
+        }
+
+        支持的Action类型：
+        - reset_session: 重置agent会话文件（重命名为backup）
+
+        Returns:
+            {"executed": int, "failed": int, "skipped": int, "results": [...]}
+        """
+        if not actions:
+            return {"executed": 0, "failed": 0, "skipped": 0, "results": []}
+
+        logger.info(f"\n⚡ 执行AI Actions（共{len(actions)}个）...")
+
+        # 按依赖顺序排序：无依赖的先执行，有依赖的后执行
+        completed_ids = set()
+        pending = list(actions)
+        ordered = []
+        max_iterations = len(pending) + 1
+
+        for _ in range(max_iterations):
+            if not pending:
+                break
+            progress = False
+            still_pending = []
+            for action in pending:
+                deps = action.get("depends_on", [])
+                if all(d in completed_ids for d in deps):
+                    ordered.append(action)
+                    if action.get("id"):
+                        completed_ids.add(action["id"])
+                    progress = True
+                else:
+                    still_pending.append(action)
+            pending = still_pending
+            if not progress:
+                # 有循环依赖，直接追加剩余
+                ordered.extend(pending)
+                break
+
+        summary = {"executed": 0, "failed": 0, "skipped": 0, "results": []}
+        agents_base = Path.home() / ".openclaw" / "agents"
+
+        for action in ordered:
+            action_type = action.get("type", "")
+            agent_name = action.get("agent", "")
+            reason = action.get("reason", "")
+            action_id = action.get("id", "")
+
+            result_entry = {
+                "type": action_type,
+                "agent": agent_name,
+                "reason": reason,
+                "status": "skipped",
+                "detail": ""
+            }
+
+            if action_type == "reset_session":
+                if not agent_name:
+                    result_entry["detail"] = "缺少agent名称"
+                    summary["skipped"] += 1
+                    summary["results"].append(result_entry)
+                    continue
+
+                # 找到最新会话文件
+                session_dir = agents_base / agent_name / "sessions"
+                if not session_dir.exists():
+                    result_entry["detail"] = f"会话目录不存在: {session_dir}"
+                    summary["skipped"] += 1
+                    logger.info(f"  ⏭ reset_session {agent_name}: 无会话目录，跳过")
+                    summary["results"].append(result_entry)
+                    continue
+
+                session_files = [f for f in session_dir.glob("*.jsonl") if "backup" not in f.name]
+                if not session_files:
+                    result_entry["detail"] = "无活跃会话文件"
+                    summary["skipped"] += 1
+                    logger.info(f"  ⏭ reset_session {agent_name}: 无活跃会话，跳过")
+                    summary["results"].append(result_entry)
+                    continue
+
+                latest = max(session_files, key=lambda x: x.stat().st_mtime)
+                if self.reset_agent_session(str(latest), agent_name):
+                    result_entry["status"] = "executed"
+                    result_entry["detail"] = f"已重置: {latest.name}"
+                    summary["executed"] += 1
+                    logger.info(f"  ✅ reset_session {agent_name}: {reason}")
+                else:
+                    result_entry["status"] = "failed"
+                    result_entry["detail"] = "重置失败"
+                    summary["failed"] += 1
+                    logger.warning(f"  ❌ reset_session {agent_name}: 重置失败")
+            else:
+                result_entry["detail"] = f"未知Action类型: {action_type}"
+                summary["skipped"] += 1
+                logger.warning(f"  ⚠️ 未知Action类型: {action_type}，跳过")
+
+            summary["results"].append(result_entry)
+
+        # 记录到通知历史
+        if summary["executed"] > 0:
+            history = self.notification_history.setdefault("action_executions", [])
+            history.append({
+                "timestamp": datetime.now().isoformat(),
+                "executed": summary["executed"],
+                "failed": summary["failed"],
+                "results": summary["results"]
+            })
+            if len(history) > 50:
+                self.notification_history["action_executions"] = history[-50:]
+            self._save_notification_history()
+
+        logger.info(f"  📊 Actions执行完成: 成功{summary['executed']}个，失败{summary['failed']}个，跳过{summary['skipped']}个")
+        return summary
 
     def _run_session_health_check(self):
         """调用会话健康检查脚本，检测并重置异常停止的agent会话
@@ -2565,10 +2701,13 @@ data/bugs/TC-XXX_description.md
 
             # 完整分析
             logger.info(f"\n🧠 综合分析所有群消息...")
-            decisions, analysis, updated_plan = self.analyze_with_claude(
+            decisions, analysis, updated_plan, actions = self.analyze_with_claude(
                 all_group_messages, all_session_status, self.notification_history,
                 self.scheduling_plan
             )
+            # 执行AI返回的Actions
+            if actions:
+                self.execute_actions(actions)
             # 更新最后完整分析时间（20分钟兜底机制）
             if updated_plan:
                 updated_plan["last_full_analysis_time"] = datetime.now().isoformat()
